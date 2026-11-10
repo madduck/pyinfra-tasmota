@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Martin F. Krafft" }]
-dependencies = ["pyinfra>=3.11", "requests>=2.31"]
+dependencies = ["pyinfra>=3.10", "requests>=2.31"]
 
 [project.entry-points."pyinfra.connectors"]
 tasmota = "pyinfra_tasmota.connector:TasmotaConnector"

@@ -1692,7 +1692,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pyinfra", specifier = ">=3.11" },
+    { name = "pyinfra", specifier = ">=3.10" },
     { name = "requests", specifier = ">=2.31" },
 ]
 
