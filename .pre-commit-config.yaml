@@ -1,0 +1,41 @@
+repos:
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.49.1
+    hooks:
+      - id: markdownlint
+
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.13.1
+    hooks:
+      - id: uv-lock
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.1
+    hooks:
+      - id: ruff-check
+        args: [--show-fixes]
+      - id: ruff-format
+        args: [--diff]
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        # Defence in depth, not a workaround for this repo: a hook runs outside
+        # direnv and cannot know what the caller's shell exported. An ambient
+        # UV_PROJECT_ENVIRONMENT or VIRTUAL_ENV makes uv use another project's
+        # venv, where pyinfra ships no types and mypy reports spurious errors.
+        # Clearing both keeps the check reproducible under any shell.
+        entry: env -u UV_PROJECT_ENVIRONMENT -u VIRTUAL_ENV uv run mypy .
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.9.4
+    hooks:
+      - id: bandit
+        args: [-c, pyproject.toml, -r, .]
+
+fail_fast: true

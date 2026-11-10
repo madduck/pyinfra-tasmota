@@ -15,6 +15,7 @@ tasmota = "pyinfra_tasmota.connector:TasmotaConnector"
 dev = [
   "bandit>=1.7",
   "mypy>=1.11",
+  "pre-commit>=4.6.2",
   "pytest>=8.0",
   "pytest-cov>=5.0",
   "ruff>=0.6",
