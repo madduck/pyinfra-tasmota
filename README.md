@@ -37,6 +37,11 @@ cache. It reads the current value from the device if the setting is not
 cached, and records a pending change only if the value differs. Every command
 is sent by `apply`, or on disconnect as a safety net.
 
+Command names are matched case-insensitively and resolve the `SO` alias of
+`SetOption`, so `SetOption114`, `setoption114`, and `so114` are the same
+command. Boolean values are folded, so a desired `0` matches a device value
+of `OFF`, and `1` matches `ON`.
+
 Non-rebooting commands are flushed as `Backlog0` batches, split to stay
 within Tasmota's limit of 30 commands and decode-config's limit of 320
 characters per command line. Reboot-triggering commands are sent on their own.

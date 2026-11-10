@@ -35,6 +35,11 @@ BACKLOG_MAX_COMMANDS = 30
 BACKLOG_MAX_LENGTH = 320
 BACKLOG_PREFIX = "Backlog0 "
 
+# Tasmota reports booleans as ON/OFF but accepts other spellings, so values
+# are folded to these sets before comparison.
+_TRUE_VALUES = frozenset({"1", "on", "true", "yes"})
+_FALSE_VALUES = frozenset({"0", "off", "false", "no"})
+
 # How long to wait for a rebooted device to answer again, and how often to poll.
 DEFAULT_REBOOT_TIMEOUT = 60.0
 REBOOT_POLL_INTERVAL = 0.5
@@ -95,7 +100,7 @@ class TasmotaConnector(BaseConnector):
         super().__init__(state, host)
         self.session = requests.Session()
         self._cache: dict[str, Any] = {}
-        self._pending: dict[str, str] = {}
+        self._pending: dict[str, tuple[str, str]] = {}
 
     @staticmethod
     def make_names_data(name: str | None = None) -> Any:
@@ -145,17 +150,20 @@ class TasmotaConnector(BaseConnector):
             raise ConnectError(f"Unexpected status response from {self.host.name!r}")
 
         self._cache = {}
-        for value in status.values():
-            if isinstance(value, dict):
-                self._cache.update(value)
+        self._merge(status)
 
         shutters = self._request("Status 13", allow_missing=True)
         if isinstance(shutters, dict):
-            for value in shutters.values():
-                if isinstance(value, dict):
-                    self._cache.update(value)
+            self._merge(shutters)
 
         log.debug("%s: cached %d settings", self.host.name, len(self._cache))
+
+    def _merge(self, sections: dict[str, Any]) -> None:
+        """Merge numbered status sections into the cache, keyed canonically."""
+        for section in sections.values():
+            if isinstance(section, dict):
+                for key, value in section.items():
+                    self._cache[_canonical(key)] = value
 
     def disconnect(self) -> None:
         """Flush any pending commands and close the HTTP session.
@@ -199,8 +207,12 @@ class TasmotaConnector(BaseConnector):
     # -- Intent recording -----------------------------------------------------
 
     def record(self, subject: str, value: Any) -> None:
-        """Record a command to be sent during the next flush."""
-        self._pending[str(subject)] = str(value)
+        """Record a command to be sent during the next flush.
+
+        Commands are keyed canonically, so ``SetOption114`` and ``so114`` do
+        not both queue. The subject is kept as given for the wire command.
+        """
+        self._pending[_canonical(subject)] = (str(subject), str(value))
 
     def has_pending(self) -> bool:
         """Return whether any command is waiting to be flushed."""
@@ -209,16 +221,14 @@ class TasmotaConnector(BaseConnector):
     def current(self, subject: str) -> str | None:
         """Return the cached value of ``subject`` or ``None`` if unknown.
 
-        The lookup is case-insensitive because Tasmota command names are.
+        The lookup is canonical, so it ignores case and the ``SO`` alias.
         """
-        for key, value in self._cache.items():
-            if key.lower() == subject.lower():
-                return str(value)
-        return None
+        value = self._cache.get(_canonical(subject))
+        return None if value is None else str(value)
 
     def cache(self, subject: str, value: Any) -> None:
         """Store ``value`` for ``subject`` in the settings cache."""
-        self._cache[subject] = value
+        self._cache[_canonical(subject)] = value
 
     def request(self, cmnd: str, allow_missing: bool = False) -> Any:
         """Send ``cmnd`` to the device and return the parsed JSON reply."""
@@ -234,8 +244,8 @@ class TasmotaConnector(BaseConnector):
         pending = dict(self._pending)
         self._pending.clear()
 
-        immediate = [(s, v) for s, v in pending.items() if s.lower() not in REBOOT_COMMANDS]
-        reboots = [(s, v) for s, v in pending.items() if s.lower() in REBOOT_COMMANDS]
+        immediate = [command for key, command in pending.items() if key not in REBOOT_COMMANDS]
+        reboots = [command for key, command in pending.items() if key in REBOOT_COMMANDS]
 
         for batch in _backlog_batches(immediate):
             self._send_batch(batch)
@@ -248,7 +258,7 @@ class TasmotaConnector(BaseConnector):
         commands = ";".join(f"{subject} {value}" for subject, value in batch)
         self._request(f"{BACKLOG_PREFIX}{commands}")
         for subject, value in batch:
-            self._cache[subject] = value
+            self.cache(subject, value)
 
     def _send_reboot(self, subject: str, value: str) -> None:
         """Send a single reboot-triggering command and wait for the device.
@@ -269,7 +279,7 @@ class TasmotaConnector(BaseConnector):
             PyinfraError: If the device does not return within the configured
                 timeout.
         """
-        previous_boot = self._cache.get("BootCount")
+        previous_boot = self.current("BootCount")
         timeout = float(self.data.get("tasmota_reboot_timeout", DEFAULT_REBOOT_TIMEOUT))
         deadline = time.monotonic() + timeout
         saw_down = False
@@ -281,7 +291,7 @@ class TasmotaConnector(BaseConnector):
             else:
                 boot = _extract_bootcount(reply)
                 if saw_down or (
-                    previous_boot is not None and boot is not None and boot != previous_boot
+                    previous_boot is not None and boot is not None and str(boot) != previous_boot
                 ):
                     log.info("%s: device is back after reboot", self.host.name)
                     self._ingest()
@@ -341,6 +351,33 @@ def _split_host_port(name: str) -> tuple[str, int]:
         host_part, _, port_part = host_part.partition(":")
         port = int(port_part)
     return host_part, port
+
+
+def _canonical(subject: str) -> str:
+    """Return the canonical form of a Tasmota command name.
+
+    Command names are case-insensitive, and ``SO`` is a documented synonym for
+    ``SetOption``, so ``SO114`` and ``SetOption114`` are the same command.
+    """
+    name = subject.strip().lower()
+    if name.startswith("so") and (name == "so" or name[2:].isdigit()):
+        return "setoption" + name[2:]
+    return name
+
+
+def _normalize(value: Any) -> str:
+    """Fold a Tasmota value to a canonical form for comparison.
+
+    Tasmota reports booleans as ``ON``/``OFF`` but accepts ``1``/``0`` and
+    ``on``/``off``, so both sides of a comparison are folded to ``1``/``0``.
+    Other values become lower-cased text.
+    """
+    text = str(value).strip().lower()
+    if text in _TRUE_VALUES:
+        return "1"
+    if text in _FALSE_VALUES:
+        return "0"
+    return text
 
 
 def _extract_bootcount(reply: Any) -> Any:

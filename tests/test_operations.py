@@ -71,22 +71,22 @@ class TestCmnd:
         before = len(connector.session.requests)
         assert len(list(cmnd._inner("Restart", 1))) == 1
         assert len(connector.session.requests) == before
-        assert connector._pending == {"Restart": "1"}
+        assert connector._pending == {"restart": ("Restart", "1")}
 
     def test_records_desired_value_and_yields_marker(self, use_connector, status0):
         connector = use_connector({"Status 0": status0, "Status 13": []})
         command = next(iter(cmnd._inner("SetOption114", 1)))
-        assert connector._pending == {"SetOption114": "1"}
+        assert connector._pending == {"setoption114": ("SetOption114", "1")}
         assert command.execute(None, FakeHost(connector), {}) is True
 
-    def test_read_current_ignores_nested_dicts(self, use_connector, status0):
-        # The reply has a non-matching key, then a matching key whose value is
-        # itself a dict. Neither yields a scalar, so the read reports nothing.
+    def test_read_current_rejects_multiple_unmatched_scalars(self, use_connector, status0):
+        # Two scalar values and no canonical match: the read cannot decide, so
+        # it reports nothing.
         connector = use_connector(
             {
                 "Status 0": status0,
                 "Status 13": [],
-                "Unknown": {"Unrelated": 1, "Unknown": {"Nested": 2}},
+                "Unknown": {"First": 1, "Second": 2},
             }
         )
         assert len(list(cmnd._inner("Unknown", "x"))) == 1
@@ -95,6 +95,66 @@ class TestCmnd:
     def test_read_current_handles_non_dict_reply(self, use_connector, status0):
         use_connector({"Status 0": status0, "Status 13": [], "SetOption120": "nope"})
         assert len(list(cmnd._inner("SetOption120", 1))) == 1
+
+    def test_read_current_rejects_command_error(self, use_connector, status0):
+        use_connector({"Status 0": status0, "Status 13": [], "SetOption120": {"Command": "Error"}})
+        assert len(list(cmnd._inner("SetOption120", 1))) == 1
+
+    def test_read_current_resolves_alias(self, use_connector, status0):
+        # so114 is answered as SetOption114; the lone scalar resolves it.
+        status0["Status"].pop("SetOption114", None)
+        connector = use_connector(
+            {
+                "Status 0": status0,
+                "Status 13": [],
+                "so114": {"SetOption114": "OFF"},
+            }
+        )
+        assert list(cmnd._inner("so114", 0)) == []
+        assert connector.current("SetOption114") == "OFF"
+
+    def test_read_current_accepts_lone_scalar(self, use_connector, status0):
+        # A lone scalar under a name the connector does not know is accepted as
+        # the value, which resolves aliases beyond SO.
+        status0["Status"].pop("SetOption114", None)
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": [], "Weird": {"SomethingElse": 1}}
+        )
+        assert list(cmnd._inner("Weird", 1)) == []
+        assert connector.current("SomethingElse") == "1"
+
+    def test_value_folding_treats_off_as_zero(self, use_connector, status0):
+        status0["Status"].pop("SetOption114", None)
+        use_connector(
+            {
+                "Status 0": status0,
+                "Status 13": [],
+                "SetOption114": {"SetOption114": "OFF"},
+            }
+        )
+        assert list(cmnd._inner("SetOption114", 0)) == []
+        assert list(cmnd._inner("SetOption114", "off")) == []
+
+    def test_value_folding_treats_on_as_one(self, use_connector, status0):
+        status0["Status"].pop("SetOption114", None)
+        use_connector(
+            {
+                "Status 0": status0,
+                "Status 13": [],
+                "SetOption114": {"SetOption114": "ON"},
+            }
+        )
+        assert list(cmnd._inner("SetOption114", 1)) == []
+        assert list(cmnd._inner("SetOption114", "on")) == []
+
+    def test_alias_and_case_match_cached_value(self, use_connector, status0):
+        # SetOption114 is already 0 in the cache; both spellings report no change
+        # without reaching the device.
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        before = len(connector.session.requests)
+        assert list(cmnd._inner("so114", 0)) == []
+        assert list(cmnd._inner("setoption114", "off")) == []
+        assert len(connector.session.requests) == before
 
 
 class TestApply:

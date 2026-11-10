@@ -10,7 +10,7 @@ from pyinfra.api.exceptions import PyinfraError
 from pyinfra.api.operation import operation
 from pyinfra.context import host
 
-from .connector import REBOOT_COMMANDS, TasmotaConnector
+from .connector import REBOOT_COMMANDS, TasmotaConnector, _canonical, _normalize
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -45,10 +45,10 @@ def cmnd(subject: str, value: Any) -> Generator[PyinfraCommand, None, None]:
     desired = str(value)
 
     current = connector.current(subject)
-    if current is None and subject.lower() not in REBOOT_COMMANDS:
+    if current is None and _canonical(subject) not in REBOOT_COMMANDS:
         current = _read_current(connector, subject)
 
-    if current is not None and str(current).lower() == desired.lower():
+    if current is not None and _normalize(current) == _normalize(desired):
         return
 
     connector.record(subject, desired)
@@ -81,13 +81,36 @@ def _connector() -> TasmotaConnector:
 
 
 def _read_current(connector: TasmotaConnector, subject: str) -> str | None:
-    """Read and cache the current value of ``subject`` from the device."""
+    """Read and cache the current value of ``subject`` from the device.
+
+    Tasmota answers a bare command with a single ``{key: value}`` object. The
+    key usually matches the command, but not always: ``so114`` answers with
+    ``SetOption114``. An exact canonical match wins; otherwise a lone scalar
+    value is accepted, which resolves aliases.
+    """
     response = connector.request(subject, allow_missing=True)
-    if isinstance(response, dict):
-        for key, value in response.items():
-            if key.lower() == subject.lower() and not isinstance(value, dict):
-                connector.cache(subject, value)
-                return str(value)
+    if not isinstance(response, dict):
+        return None
+
+    scalars = {
+        key: value
+        for key, value in response.items()
+        if not isinstance(value, (dict, list)) and key.lower() != "command"
+    }
+    if not scalars:
+        return None
+
+    target = _canonical(subject)
+    for key, value in scalars.items():
+        if _canonical(key) == target:
+            connector.cache(key, value)
+            return str(value)
+
+    if len(scalars) == 1:
+        key, value = next(iter(scalars.items()))
+        connector.cache(key, value)
+        return str(value)
+
     return None
 
 

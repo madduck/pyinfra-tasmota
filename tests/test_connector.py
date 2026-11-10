@@ -14,7 +14,9 @@ from pyinfra_tasmota.connector import (
     BACKLOG_PREFIX,
     TasmotaConnector,
     _backlog_batches,
+    _canonical,
     _extract_bootcount,
+    _normalize,
     _split_host_port,
 )
 from tests.conftest import CatchAll, FakeResponse
@@ -51,6 +53,35 @@ class TestSplitHostPort:
 
     def test_explicit_port(self):
         assert _split_host_port("tasmota.example.org:81") == ("tasmota.example.org", 81)
+
+
+class TestCanonical:
+    def test_lowercases(self):
+        assert _canonical("SetOption114") == "setoption114"
+
+    def test_so_alias(self):
+        assert _canonical("SO114") == "setoption114"
+        assert _canonical("so") == "setoption"
+
+    def test_so_prefix_without_digits_is_kept(self):
+        assert _canonical("SoftAPMac") == "softapmac"
+
+    def test_other_names(self):
+        assert _canonical(" Module ") == "module"
+
+
+class TestNormalize:
+    def test_true_values(self):
+        for value in ("1", "on", "ON", "true", "yes"):
+            assert _normalize(value) == "1"
+
+    def test_false_values(self):
+        for value in ("0", "off", "OFF", "false", "no"):
+            assert _normalize(value) == "0"
+
+    def test_other_values(self):
+        assert _normalize("3") == "3"
+        assert _normalize("  Tokens ") == "tokens"
 
 
 class TestBacklogBatches:
