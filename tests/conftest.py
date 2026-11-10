@@ -76,7 +76,6 @@ def status0():
             "FriendlyName": ["Kitchen"],
             "Topic": "tasmota_abc",
             "Power": "OFF",
-            "SaveData": 1,
             "SetOption114": 0,
         },
         "StatusPRM": {"Baudrate": 115200, "RestartReason": "Power On", "BootCount": 5},

@@ -121,27 +121,6 @@ class TestConnect:
             connector.connect()
 
 
-class TestSaveDataRepair:
-    def test_repairs_stuck_zero(self, make_connector, status0):
-        status0["Status"]["SaveData"] = 0
-        connector = make_connector(
-            {"Status 0": status0, "Status 13": [], "SaveData 1": {"SaveData": "Done"}}
-        )
-        connector.connect()
-        assert any("cmnd=SaveData+1" in url for url in connector.session.requests)
-
-    def test_leaves_healthy_value(self, make_connector, status0):
-        connector = make_connector({"Status 0": status0, "Status 13": []})
-        connector.connect()
-        assert not any("cmnd=SaveData+1" in url for url in connector.session.requests)
-
-    def test_missing_savedata_is_ignored(self, make_connector, status0):
-        del status0["Status"]["SaveData"]
-        connector = make_connector({"Status 0": status0, "Status 13": []})
-        connector.connect()
-        assert connector.current("Module") == "1"
-
-
 class TestApply:
     def test_no_pending_is_a_noop(self, make_connector, status0):
         connector = make_connector({"Status 0": status0, "Status 13": []})
@@ -154,16 +133,16 @@ class TestApply:
         connector = make_connector({"Status 0": status0, "Status 13": []})
         connector.connect()
         connector.record("SetOption114", 1)
-        connector.session.responses["Backlog0 SaveData 0;SetOption114 1;SaveData 1"] = {}
+        connector.session.responses["Backlog0 SetOption114 1"] = {}
         connector.apply()
-        assert _last_cmnd(connector.session) == "Backlog0 SaveData 0;SetOption114 1;SaveData 1"
+        assert _last_cmnd(connector.session) == "Backlog0 SetOption114 1"
         assert connector.current("SetOption114") == "1"
 
     def test_apply_is_idempotent(self, make_connector, status0):
         connector = make_connector({"Status 0": status0, "Status 13": []})
         connector.connect()
         connector.record("SetOption114", 1)
-        connector.session.responses["Backlog0 SaveData 0;SetOption114 1;SaveData 1"] = {}
+        connector.session.responses["Backlog0 SetOption114 1"] = {}
         connector.apply()
         count = len(connector.session.requests)
         connector.apply()
@@ -172,7 +151,7 @@ class TestApply:
     def test_batch_respects_backlog_limit(self, make_connector, status0):
         connector = make_connector({"Status 0": status0, "Status 13": []})
         connector.connect()
-        for index in range(BACKLOG_MAX_COMMANDS):
+        for index in range(BACKLOG_MAX_COMMANDS + 1):
             connector.record(f"SetOption{index}", 1)
         connector.session.responses = CatchAll()
         connector.apply()
@@ -291,7 +270,7 @@ class TestDisconnect:
         connector = make_connector({"Status 0": status0, "Status 13": []})
         connector.connect()
         connector.record("SetOption114", 1)
-        connector.session.responses["Backlog0 SaveData 0;SetOption114 1;SaveData 1"] = {}
+        connector.session.responses["Backlog0 SetOption114 1"] = {}
         connector.disconnect()
         assert connector.session.closed is True
 

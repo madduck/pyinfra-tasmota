@@ -3,15 +3,8 @@
 The connector talks to a Tasmota device through its HTTP API. On connect it
 pulls a status dump to populate a cache of the device settings. Operations
 record their intent against that cache, and the pending commands are flushed
-to the device as ``Backlog0`` batches on disconnect.
-
-Tasmota writes every changed setting to flash. To avoid wear, a batch of
-non-rebooting commands is wrapped in ``SaveData 0`` (no automatic flash
-writes) followed by ``SaveData 1`` (restore automatic writes). Reboot
-triggering commands are not wrapped: a reboot drains or aborts the backlog, so
-a trailing ``SaveData 1`` could be lost. Because ``SaveData`` is persisted
-immediately and survives a reboot, the connector also checks and repairs a
-stuck value during connect.
+to the device as ``Backlog0`` batches, either through the ``apply`` operation
+or on disconnect.
 """
 
 from __future__ import annotations
@@ -35,9 +28,7 @@ if TYPE_CHECKING:
 
 log = logger.getChild("pyinfra-tasmota")
 
-# Tasmota's Backlog accepts at most this many commands. Two slots are
-# reserved for the SaveData 0 and SaveData 1 guard, so a batch carries at most
-# ``BACKLOG_MAX_COMMANDS - 2`` real commands.
+# Tasmota's Backlog accepts at most this many commands.
 BACKLOG_MAX_COMMANDS = 30
 
 # How long to wait for a rebooted device to answer again, and how often to poll.
@@ -160,8 +151,6 @@ class TasmotaConnector(BaseConnector):
                 if isinstance(value, dict):
                     self._cache.update(value)
 
-        self._repair_savedata()
-
         log.debug("%s: cached %d settings", self.host.name, len(self._cache))
 
     def disconnect(self) -> None:
@@ -244,16 +233,16 @@ class TasmotaConnector(BaseConnector):
         immediate = [(s, v) for s, v in pending.items() if s.lower() not in REBOOT_COMMANDS]
         reboots = [(s, v) for s, v in pending.items() if s.lower() in REBOOT_COMMANDS]
 
-        for batch in _chunk(immediate, BACKLOG_MAX_COMMANDS - 2):
+        for batch in _chunk(immediate, BACKLOG_MAX_COMMANDS):
             self._send_batch(batch)
 
         for subject, value in reboots:
             self._send_reboot(subject, value)
 
     def _send_batch(self, batch: list[tuple[str, str]]) -> None:
-        """Send a batch of non-rebooting commands, guarding against flash wear."""
-        parts = ["SaveData 0", *(f"{subject} {value}" for subject, value in batch), "SaveData 1"]
-        self._request("Backlog0 " + ";".join(parts))
+        """Send a batch of non-rebooting commands as a single Backlog0."""
+        commands = ";".join(f"{subject} {value}" for subject, value in batch)
+        self._request(f"Backlog0 {commands}")
         for subject, value in batch:
             self._cache[subject] = value
 
@@ -261,8 +250,6 @@ class TasmotaConnector(BaseConnector):
         """Send a single reboot-triggering command and wait for the device.
 
         A reboot drains or aborts the backlog, so the command must stand alone.
-        It is not wrapped in a ``SaveData`` guard: the reboot persists the
-        configuration itself, and a trailing ``SaveData 1`` could be lost.
         """
         self._request(f"{subject} {value}")
         self._await_reboot()
@@ -300,13 +287,6 @@ class TasmotaConnector(BaseConnector):
         raise PyinfraError(
             f"{self.host.name}: device did not return within {timeout:g}s after reboot"
         )
-
-    def _repair_savedata(self) -> None:
-        if self._cache.get("SaveData") == 0:
-            log.warning("%s: repairing stuck SaveData 0", self.host.name)
-            self._request("SaveData 1")
-        elif "SaveData" not in self._cache:
-            log.debug("%s: device does not expose SaveData", self.host.name)
 
     # -- Unsupported execution surface ---------------------------------------
 
