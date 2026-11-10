@@ -390,6 +390,61 @@ class TestDisconnect:
         assert connector.session.closed is True
 
 
+class TestShutter:
+    def test_enabled_reads_device(self, make_connector, status0):
+        connector = make_connector(
+            {"Status 0": status0, "Status 13": [], "SetOption80": {"SetOption80": "ON"}}
+        )
+        connector.connect()
+        assert connector.shutter_enabled() is True
+
+    def test_disabled(self, make_connector, status0):
+        connector = make_connector(
+            {"Status 0": status0, "Status 13": [], "SetOption80": {"SetOption80": "OFF"}}
+        )
+        connector.connect()
+        assert connector.shutter_enabled() is False
+
+    def test_disabled_when_reply_is_not_a_dict(self, make_connector, status0):
+        connector = make_connector({"Status 0": status0, "Status 13": [], "SetOption80": "nope"})
+        connector.connect()
+        assert connector.shutter_enabled() is False
+
+    def test_disabled_when_reply_lacks_the_key(self, make_connector, status0):
+        connector = make_connector({"Status 0": status0, "Status 13": [], "SetOption80": {}})
+        connector.connect()
+        assert connector.shutter_enabled() is False
+
+    def test_enable_is_noop_when_enabled(self, make_connector, status0):
+        status0["Status"]["SetOption80"] = 1
+        connector = make_connector({"Status 0": status0, "Status 13": []})
+        connector.connect()
+        before = len(connector.session.requests)
+        connector.enable_shutter()
+        assert len(connector.session.requests) == before
+
+    def test_enable_restarts_device(self, make_connector, status0, monkeypatch):
+        monkeypatch.setattr("pyinfra_tasmota.connector.time.sleep", lambda _seconds: None)
+
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 13":
+                return {}
+            if cmnd == "SetOption80":
+                return {"SetOption80": "OFF"}
+            if cmnd == "Status 1":
+                return {"StatusPRM": {"BootCount": 6}}
+            return {}
+
+        connector = make_connector(handler)
+        connector.connect()
+        connector.enable_shutter()
+        assert connector.shutter_enabled() is True
+        assert any("SetOption80+1" in url for url in connector.session.requests)
+        assert any("Restart+1" in url for url in connector.session.requests)
+
+
 class TestUnsupported:
     def test_shell(self, make_connector):
         connector = make_connector({})

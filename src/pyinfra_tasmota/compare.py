@@ -128,6 +128,11 @@ _ADAPTERS: dict[str, Adapter] = {
     "template": _Json(ignore=("ARCH",), unwrapped=True),
 }
 
+# Shutter travel durations are stored as tenths of a second and read back as
+# a float (12.0 for 12), so compare them numerically.
+_SHUTTER_DURATION = _Approximate(0.05)
+_SHUTTER_DURATION_PATTERN = re.compile(r"shutter(?:open|close)duration\d+$")
+
 _PULSETIME_PATTERN = re.compile(r"pulsetime\d+$")
 
 
@@ -143,6 +148,8 @@ def adapter_for(command: str) -> Adapter:
         return adapter
     if _PULSETIME_PATTERN.fullmatch(canonical):
         return _PULSETIME
+    if _SHUTTER_DURATION_PATTERN.fullmatch(canonical):
+        return _SHUTTER_DURATION
     if is_secret(command):
         return _MASKED
     return _DEFAULT

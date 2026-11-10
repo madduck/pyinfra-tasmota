@@ -63,6 +63,15 @@ class TestApproximateAdapter:
         assert not adapter_for("Latitude").matches("nope", "other")
 
 
+class TestShutterDurationAdapter:
+    def test_compares_numerically(self):
+        assert adapter_for("ShutterOpenDuration1").matches(12, 12.0)
+        assert adapter_for("ShutterCloseDuration1").matches("12", "12.0")
+
+    def test_differs(self):
+        assert not adapter_for("ShutterOpenDuration1").matches(12, 13.0)
+
+
 class TestAliasAdapter:
     def test_fulltopic_default(self):
         assert adapter_for("FullTopic").matches(1, "%prefix%/%topic%/")

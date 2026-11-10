@@ -82,6 +82,64 @@ def ensure_host_data(
         yield _marker()
 
 
+@operation()
+def shutter(
+    *,
+    open_duration: float,
+    close_duration: float,
+    interlock: str = "1,2",
+    mode: int = 1,
+    relay: int = 1,
+    button: int | None = None,
+    index: int = 1,
+) -> Generator[PyinfraCommand, None, None]:
+    """Configure a Tasmota shutter.
+
+    Shutter support must be enabled before the other commands work, and the
+    device has to restart for that to take effect. If it is not enabled, the
+    connector enables ``SetOption80``, restarts the device, and waits for it
+    to return before the remaining settings are sent.
+
+    Args:
+        open_duration: Seconds to open fully (``ShutterOpenDuration``).
+        close_duration: Seconds to close fully (``ShutterCloseDuration``).
+        interlock: Relay pair to interlock, sent first (``Interlock``).
+        mode: Shutter mode (``ShutterMode``), default ``1``.
+        relay: First relay of the pair (``ShutterRelay``), default ``1``.
+        button: Optional button number (``ShutterButton``).
+        index: Shutter number, default ``1``.
+
+    Yields:
+        At most one command.
+    """
+    connector = _connector()
+    settings: dict[str, Any] = {
+        "ShutterMode": mode,
+        f"ShutterRelay{index}": relay,
+        f"ShutterOpenDuration{index}": open_duration,
+        f"ShutterCloseDuration{index}": close_duration,
+    }
+    if button is not None:
+        settings[f"ShutterButton{index}"] = button
+
+    to_send = [
+        subject for subject, value in settings.items() if _needs_change(connector, subject, value)
+    ]
+    enabled = connector.shutter_enabled()
+    if enabled and not to_send:
+        return
+
+    # The interlock must be set before the shutter mode that requires it.
+    _queue_sequence(connector, "Interlock", [interlock, "ON"])
+    for subject in to_send:
+        connector.record(subject, str(settings[subject]))
+
+    if not enabled:
+        yield _enable_shutter()
+    else:
+        yield _marker()
+
+
 def _ensure_all(connector: TasmotaConnector, commands: Mapping[str, Any]) -> bool:
     """Ensure a mapping of commands, returning whether any change was recorded."""
     changed = False
@@ -106,13 +164,12 @@ def _queue_sequence(
     return bool(values)
 
 
-def _ensure(connector: TasmotaConnector, subject: str, value: Any) -> bool:
-    """Ensure one command, returning whether a change was recorded."""
+def _needs_change(connector: TasmotaConnector, subject: str, value: Any) -> bool:
+    """Return whether a command must be sent, reading the device if needed."""
     desired = str(value)
     adapter = adapter_for(subject)
 
     if adapter.skip:
-        connector.record(subject, desired)
         if connector.executing:
             connector.log_at(
                 2, "%s: %s is masked, setting unconditionally", connector.host.name, subject
@@ -155,8 +212,15 @@ def _ensure(connector: TasmotaConnector, subject: str, value: Any) -> bool:
                 redact(subject, observed),
                 redact(subject, desired),
             )
-    connector.record(subject, desired)
     return True
+
+
+def _ensure(connector: TasmotaConnector, subject: str, value: Any) -> bool:
+    """Ensure one command, returning whether a change was recorded."""
+    if _needs_change(connector, subject, value):
+        connector.record(subject, str(value))
+        return True
+    return False
 
 
 @operation()
@@ -217,6 +281,18 @@ def _read_current(connector: TasmotaConnector, subject: str) -> Any:
         return value
 
     return None
+
+
+def _enable_shutter() -> PyinfraCommand:
+    """Return a command that enables shutter support and waits for the reboot."""
+
+    def enable(state: Any, host: Any) -> bool:
+        connector = host.connector
+        assert isinstance(connector, TasmotaConnector)
+        connector.enable_shutter()
+        return True
+
+    return FunctionCommand(enable, (), {})
 
 
 def _marker() -> PyinfraCommand:

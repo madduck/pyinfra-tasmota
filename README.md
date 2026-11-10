@@ -113,6 +113,27 @@ Only commands whose bare form acts on the device or reports no value, such as
 
 If the device does not return within the timeout, `apply` reports an error.
 
+## Shutters
+
+The `shutter` operation configures a shutter. Shutter support has to be
+enabled first, and the device restarted for that to take effect, so the
+operation enables `SetOption80`, restarts the device, waits for it to return,
+and only then sends the remaining settings:
+
+```py
+from pyinfra_tasmota.operations import apply, shutter
+
+shutter(open_duration=12, close_duration=12, relay=1, button=4)
+apply()
+```
+
+It sets `Interlock <pair>` and `Interlock ON` first (the shutter mode needs
+the interlock), then `ShutterMode`, `ShutterRelay<x>`, `ShutterButton<x>`
+(when given), `ShutterOpenDuration<x>`, and `ShutterCloseDuration<x>`.
+`index` selects the shutter and defaults to `1`. Settings that already match
+are skipped, and the device is only restarted when shutter support has to be
+enabled.
+
 ## Verbosity
 
 The connector follows pyinfra's `-v` flags:

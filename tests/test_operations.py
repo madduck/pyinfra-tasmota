@@ -7,7 +7,7 @@ import logging
 import pytest
 
 from pyinfra_tasmota import operations
-from pyinfra_tasmota.operations import apply, cmnd, ensure_host_data
+from pyinfra_tasmota.operations import apply, cmnd, ensure_host_data, shutter
 from tests.conftest import CatchAll, make_state
 
 
@@ -338,6 +338,61 @@ class TestAdapters:
         connector = use_connector({"Status 0": status0, "Status 13": []})
         assert len(list(cmnd._inner(Password1="secret"))) == 1
         assert list(connector._pending) == [("password1", "secret")]
+
+
+SHUTTER_RESPONSES = {
+    "SetOption80": {"SetOption80": "ON"},
+    "ShutterMode": {"ShutterMode": 1},
+    "ShutterRelay1": {"ShutterRelay1": 1},
+    "ShutterOpenDuration1": {"ShutterOpenDuration1": 12.0},
+    "ShutterCloseDuration1": {"ShutterCloseDuration1": 12.0},
+}
+
+
+class TestShutterOperation:
+    def test_no_change_yields_nothing(self, use_connector, status0):
+        use_connector({"Status 0": status0, "Status 13": [], **SHUTTER_RESPONSES})
+        assert list(shutter._inner(open_duration=12, close_duration=12)) == []
+
+    def test_change_records_interlock_first(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": [], **SHUTTER_RESPONSES})
+        commands = list(shutter._inner(open_duration=12, close_duration=12, mode=2))
+        assert len(commands) == 1
+        assert list(connector._pending) == [
+            ("interlock", "1,2"),
+            ("interlock", "ON"),
+            ("shuttermode", "2"),
+        ]
+
+    def test_button_is_included_when_given(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": [], **SHUTTER_RESPONSES})
+        list(shutter._inner(open_duration=12, close_duration=12, button=1))
+        assert ("shutterbutton1", "1") in connector._pending
+
+    def test_disabled_yields_enable_command(self, use_connector, status0):
+        responses = {**SHUTTER_RESPONSES, "SetOption80": {"SetOption80": "OFF"}}
+        use_connector({"Status 0": status0, "Status 13": [], **responses})
+        commands = list(shutter._inner(open_duration=12, close_duration=12))
+        assert len(commands) == 1
+
+    def test_enable_command_runs_at_execution(self, use_connector, status0, monkeypatch):
+        monkeypatch.setattr("pyinfra_tasmota.connector.time.sleep", lambda _seconds: None)
+
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 13":
+                return {}
+            if cmnd == "SetOption80":
+                return {"SetOption80": "OFF"}
+            if cmnd == "Status 1":
+                return {"StatusPRM": {"BootCount": 6}}
+            return SHUTTER_RESPONSES.get(cmnd, {})
+
+        connector = use_connector(handler)
+        command = next(iter(shutter._inner(open_duration=12, close_duration=12)))
+        assert command.execute(None, FakeHost(connector), {}) is True
+        assert connector.shutter_enabled() is True
 
 
 class TestApply:

@@ -401,6 +401,37 @@ class TasmotaConnector(BaseConnector):
             f"{self.host.name}: device did not return within {timeout:g}s after reboot"
         )
 
+    # -- Shutters -------------------------------------------------------------
+
+    def shutter_enabled(self) -> bool:
+        """Return whether shutter support is enabled (``SetOption80``).
+
+        The status dump only exposes options as a hex bit string, so the value
+        is read from the device when it is not cached.
+        """
+        value = self.raw("SetOption80")
+        if value is None:
+            reply = self._request("SetOption80", allow_missing=True)
+            if isinstance(reply, dict):
+                value = reply.get("SetOption80")
+                if value is not None:
+                    self.cache("SetOption80", value)
+        return _normalize(value) == "1"
+
+    def enable_shutter(self) -> None:
+        """Enable shutter support and restart the device to apply it.
+
+        Tasmota does not restart when ``SetOption80`` changes by itself, so the
+        connector sends an explicit restart and waits for the device. Does
+        nothing when shutter support is already enabled.
+        """
+        if self.shutter_enabled():
+            return
+        self._request("SetOption80 1")
+        self.log_at(1, "%s: sent %s %s", self.host.name, "SetOption80", 1)
+        self._send_reboot("Restart", "1")
+        self.cache("SetOption80", 1)
+
     # -- Unsupported execution surface ---------------------------------------
 
     def run_shell_command(
