@@ -373,6 +373,12 @@ class TestShutterOperation:
         list(shutter._inner(open_duration=12, close_duration=12, button=1))
         assert ("shutterbutton1", "1") in connector._pending
 
+    def test_button_prefix_matches(self, use_connector, status0):
+        responses = {**SHUTTER_RESPONSES, "ShutterButton1": {"ShutterButton1": "1 up 100/0"}}
+        connector = use_connector({"Status 0": status0, "Status 13": [], **responses})
+        list(shutter._inner(open_duration=12, close_duration=12, button="1 up"))
+        assert ("shutterbutton1", "1 up") not in connector._pending
+
     def test_disabled_yields_enable_command(self, use_connector, status0):
         responses = {**SHUTTER_RESPONSES, "SetOption80": {"SetOption80": "OFF"}}
         use_connector({"Status 0": status0, "Status 13": [], **responses})
@@ -426,6 +432,16 @@ class TestRuleOperation:
         }
         use_connector(responses)
         assert list(rule._inner("ON x DO y ENDON")) == []
+
+    def test_flag_matches_when_state_on(self, use_connector, status0):
+        responses = {
+            "Status 0": status0,
+            "Status 13": [],
+            "Rule1": {"Rule1": {"State": "ON", "Once": "OFF", "Rules": "on x do y endon"}},
+        }
+        connector = use_connector(responses)
+        assert list(rule._inner("ON x DO y ENDON", enabled=True)) == []
+        assert connector._pending == {}
 
     def test_flags_are_recorded(self, use_connector, status0):
         responses = {

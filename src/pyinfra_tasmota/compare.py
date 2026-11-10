@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any
 
 from .connector import _canonical, _normalize, is_secret
@@ -83,6 +84,39 @@ class _Approximate(Adapter):
             return _normalize(observed) == _normalize(desired)
 
 
+class _Decimal(Adapter):
+    """Compare numbers truncated to a number of decimal places.
+
+    Tasmota stores the shutter durations as tenths of a second, so it keeps
+    only one decimal place.
+    """
+
+    def __init__(self, decimals: int) -> None:
+        self._quantum = Decimal(1).scaleb(-decimals)
+
+    def _truncate(self, value: Any) -> str:
+        try:
+            return str(Decimal(str(value)).quantize(self._quantum, rounding=ROUND_DOWN))
+        except InvalidOperation:
+            return _normalize(value)
+
+    def matches(self, desired: Any, observed: Any) -> bool:
+        return self._truncate(desired) == self._truncate(observed)
+
+
+class _Prefix(Adapter):
+    """Compare when the device's value starts with the desired value.
+
+    ``ShutterButton`` answers with the expanded button configuration, of which
+    the desired value is a prefix.
+    """
+
+    def matches(self, desired: Any, observed: Any) -> bool:
+        if isinstance(observed, dict):
+            return _normalize(observed) == _normalize(desired)
+        return _normalize(observed).startswith(_normalize(desired))
+
+
 class _Alias(Adapter):
     """Expand a shortcut desired value to the value the device stores."""
 
@@ -128,8 +162,18 @@ class _Interlock(Adapter):
         if not isinstance(observed, dict):
             return _normalize(observed) == _normalize(desired)
         wanted = _normalize(desired)
-        field = "Interlock" if wanted in ("0", "1") else "Groups"
-        return _normalize(observed.get(field)) == wanted
+        if wanted in ("0", "1"):
+            return _normalize(observed.get("Interlock")) == wanted
+        return _groups(desired) == _groups(observed.get("Groups"))
+
+
+def _groups(value: Any) -> list[frozenset[int]]:
+    """Return interlock groups as sets of relay numbers."""
+    normalized = re.sub(r"\s*,\s*", ",", str(value).strip())
+    return [
+        frozenset(int(part) for part in group.split(",") if part.isdigit())
+        for group in normalized.split()
+    ]
 
 
 # Rule flags map ``Rule<x>`` payloads to the response field they change.
@@ -178,13 +222,25 @@ _ADAPTERS: dict[str, Adapter] = {
     "interlock": _Interlock(),
 }
 
-# Shutter travel durations are stored as tenths of a second and read back as
-# a float (12.0 for 12), so compare them numerically.
-_SHUTTER_DURATION = _Approximate(0.05)
+# Shutter travel durations are stored as tenths of a second, so the device
+# keeps one decimal place. ShutterButtons answer with an expanded config of
+# which the desired value is a prefix.
+_SHUTTER_DURATION = _Decimal(1)
 _SHUTTER_DURATION_PATTERN = re.compile(r"shutter(?:open|close)duration\d+$")
+_SHUTTER_BUTTON = _Prefix()
+_SHUTTER_BUTTON_PATTERN = re.compile(r"shutterbutton\d+$")
 
 _PULSETIME_PATTERN = re.compile(r"pulsetime\d+$")
 _RULE_PATTERN = re.compile(r"rule\d+$")
+
+
+# Indexed commands, matched by pattern rather than exact name.
+_PATTERNS = (
+    (_PULSETIME_PATTERN, _PULSETIME),
+    (_SHUTTER_DURATION_PATTERN, _SHUTTER_DURATION),
+    (_SHUTTER_BUTTON_PATTERN, _SHUTTER_BUTTON),
+    (_RULE_PATTERN, _RULE),
+)
 
 
 def adapter_for(command: str) -> Adapter:
@@ -197,12 +253,9 @@ def adapter_for(command: str) -> Adapter:
     adapter = _ADAPTERS.get(canonical)
     if adapter is not None:
         return adapter
-    if _PULSETIME_PATTERN.fullmatch(canonical):
-        return _PULSETIME
-    if _SHUTTER_DURATION_PATTERN.fullmatch(canonical):
-        return _SHUTTER_DURATION
-    if _RULE_PATTERN.fullmatch(canonical):
-        return _RULE
+    for pattern, candidate in _PATTERNS:
+        if pattern.fullmatch(canonical):
+            return candidate
     if is_secret(command):
         return _MASKED
     return _DEFAULT

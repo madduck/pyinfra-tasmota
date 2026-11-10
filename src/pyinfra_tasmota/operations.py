@@ -90,7 +90,7 @@ def shutter(
     interlock: str = "1,2",
     mode: int = 1,
     relay: int = 1,
-    button: int | None = None,
+    button: str | int | None = None,
     index: int = 1,
 ) -> Generator[PyinfraCommand, None, None]:
     """Configure a Tasmota shutter.
@@ -106,7 +106,7 @@ def shutter(
         interlock: Relay pair to interlock, sent first (``Interlock``).
         mode: Shutter mode (``ShutterMode``), default ``1``.
         relay: First relay of the pair (``ShutterRelay``), default ``1``.
-        button: Optional button number (``ShutterButton``).
+        button: Optional ``ShutterButton`` argument, for example ``"1 up"``.
         index: Shutter number, default ``1``.
 
     Yields:

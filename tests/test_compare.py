@@ -71,12 +71,27 @@ class TestApproximateAdapter:
 
 
 class TestShutterDurationAdapter:
-    def test_compares_numerically(self):
-        assert adapter_for("ShutterOpenDuration1").matches(12, 12.0)
+    def test_truncates_to_one_decimal(self):
+        # The device stores tenths of a second, so 12.34 is read back as 12.3.
+        assert adapter_for("ShutterOpenDuration1").matches(12.34, 12.3)
         assert adapter_for("ShutterCloseDuration1").matches("12", "12.0")
 
     def test_differs(self):
-        assert not adapter_for("ShutterOpenDuration1").matches(12, 13.0)
+        assert not adapter_for("ShutterOpenDuration1").matches(12.3, 13.3)
+
+    def test_non_numeric_falls_back(self):
+        assert adapter_for("ShutterOpenDuration1").matches("nope", "nope")
+
+
+class TestShutterButtonAdapter:
+    def test_prefix_matches(self):
+        assert adapter_for("ShutterButton1").matches("1 up", "1 up 100/0 50/0")
+
+    def test_not_a_prefix(self):
+        assert not adapter_for("ShutterButton1").matches("1 down", "1 up 100/0")
+
+    def test_dict_falls_back(self):
+        assert not adapter_for("ShutterButton1").matches("x", {"x": "x"})
 
 
 class TestAliasAdapter:
@@ -123,6 +138,13 @@ class TestJsonAdapter:
 class TestInterlockAdapter:
     def test_groups(self):
         assert adapter_for("Interlock").matches("1,2", INTERLOCK_OBSERVED)
+
+    def test_group_order_and_spacing(self):
+        assert adapter_for("Interlock").matches("2, 1", INTERLOCK_OBSERVED)
+
+    def test_multiple_groups_differ(self):
+        observed = {"Interlock": "ON", "Groups": "1,2 3,4"}
+        assert not adapter_for("Interlock").matches("1,2", observed)
 
     def test_enabled(self):
         assert adapter_for("Interlock").matches("ON", INTERLOCK_OBSERVED)
