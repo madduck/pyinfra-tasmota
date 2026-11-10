@@ -123,6 +123,44 @@ Only commands whose bare form acts on the device or reports no value, such as
 
 If the device does not return within the timeout, `apply` reports an error.
 
+## Templates
+
+The `template` operation stores a template and activates it by default:
+
+```py
+from pyinfra_tasmota.operations import apply, template
+
+template(
+    {
+        "NAME": "Custom relay",
+        "GPIO": [0, 0, 0, 0, 224, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "FLAG": 0,
+        "BASE": 18,
+        "CMND": "SetOption114 1|Power ON",
+    }
+)
+apply()
+```
+
+The value can be a dictionary or a JSON object string. The operation compares
+and queues `Template`, then ensures `Module 0` to select the template. It also
+ensures each pipe-separated (`|`) command in `CMND`. An optional `Backlog`
+prefix is accepted. Commands keep their arguments, including spaces.
+
+`CMND` is removed from the template sent to the device. Its commands and
+`Module 0` are compared even when the stored template already matches.
+Commands whose values already match are skipped.
+
+With `template(value, activate=False)`, only the template is stored. The
+operation neither selects `Module 0` nor runs the `CMND` commands.
+
+All changes use the existing queue and need `apply()` or disconnect to send
+them. The connector sends ordinary commands before reboot-triggering commands.
+Thus ordinary `CMND` commands run before `Template` and `Module`, not after
+activation. Although `CMND` uses pipes as separators, the queue uses semicolons
+for `Backlog0` batches. Do not put arguments that contain semicolons in this
+queue, such as complex rule text. Use `rule` for those rules.
+
 ## Shutters
 
 The `shutter` operation configures a shutter. Shutter support has to be

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 import pytest
 
 from pyinfra_tasmota import operations
-from pyinfra_tasmota.operations import apply, cmnd, ensure_host_data, rule, shutter
+from pyinfra_tasmota.operations import apply, cmnd, ensure_host_data, rule, shutter, template
 from tests.conftest import CatchAll, make_state
 
 
@@ -129,6 +130,67 @@ class TestEnsureHostData:
         commands = list(ensure_host_data._inner())
         assert len(commands) == 1
         assert ("rule1", "1") in connector._pending
+
+
+class TestTemplate:
+    @pytest.mark.parametrize("as_json", [False, True])
+    def test_queues_template_activation_and_commands(self, use_connector, status0, as_json):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        desired = {
+            "NAME": "x",
+            "GPIO": [0, 1],
+            "FLAG": 0,
+            "BASE": 18,
+            "CMND": " SetOption114 1| | Power ON| Topic room with spaces| Restart ",
+        }
+        value = json.dumps(desired) if as_json else desired
+        commands = list(template._inner(value))
+        assert len(commands) == 1
+        assert commands[0].execute(None, FakeHost(connector), {}) is True
+        queued = list(connector._pending)
+        assert queued[0][0] == "template"
+        assert json.loads(queued[0][1]) == {
+            key: value for key, value in desired.items() if key != "CMND"
+        }
+        assert queued[1:] == [
+            ("module", "0"),
+            ("setoption114", "1"),
+            ("power", "ON"),
+            ("topic", "room with spaces"),
+            ("restart", ""),
+        ]
+        assert "CMND" in desired  # Do not mutate the caller's template.
+
+    def test_inactive_only_queues_template(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        assert len(list(template._inner({"NAME": "x", "CMND": "Power ON"}, activate=False))) == 1
+        assert list(connector._pending) == [("template", '{"NAME":"x"}')]
+
+    @pytest.mark.parametrize("cmnd", [None, "", "SetOption114 0| Power OFF"])
+    def test_matching_template_and_commands_yield_nothing(self, use_connector, status0, cmnd):
+        status0["Status"]["Module"] = 0
+        desired = {"NAME": "x"}
+        if cmnd is not None:
+            desired["CMND"] = cmnd
+        connector = use_connector({"Status 0": status0, "Status 13": [], "Template": {"NAME": "x"}})
+        assert list(template._inner(desired)) == []
+        assert not connector.has_pending()
+
+    def test_matching_template_still_activates_and_ensures_commands(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": [], "Template": {"NAME": "x"}})
+        assert len(list(template._inner({"NAME": "x", "CMND": "SetOption114 1"}))) == 1
+        assert list(connector._pending) == [("module", "0"), ("setoption114", "1")]
+
+    def test_backlog_prefix(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        list(template._inner({"NAME": "x", "CMND": "bAcKlOg SetOption114 1| Power ON"}))
+        assert list(connector._pending)[2:] == [("setoption114", "1"), ("power", "ON")]
+
+    def test_invalid_json(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        with pytest.raises(json.JSONDecodeError):
+            list(template._inner("not json"))
+        assert not connector.has_pending()
 
 
 class TestCmnd:

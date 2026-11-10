@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from typing import TYPE_CHECKING, Any
 
 from pyinfra import logger
@@ -51,6 +53,45 @@ def cmnd(**kwargs: Any) -> Generator[PyinfraCommand, None, None]:
         At most one marker command when any value must change.
     """
     if _ensure_all(_connector(), kwargs):
+        yield _marker()
+
+
+@operation()
+def template(
+    value: str | dict[str, Any], *, activate: bool = True
+) -> Generator[PyinfraCommand, None, None]:
+    """Set a Tasmota template and optionally activate it.
+
+    Template fields are compared as JSON, ignoring ``ARCH`` and ``CMND``.
+    ``CMND`` is removed from the template sent to the device. When activation
+    is requested, ``Module 0`` and the commands from ``CMND`` are also ensured,
+    even if the template already matches. Commands are queued for ``apply``
+    or disconnect, using the connector's normal flush order.
+
+    Args:
+        value: Template dictionary or JSON object string. ``CMND`` holds
+            pipe-separated commands, with an optional ``Backlog`` prefix.
+        activate: Select the template with ``Module 0`` and ensure its commands.
+            If False, only store the template.
+
+    Yields:
+        At most one marker command when any value must change.
+    """
+    data = json.loads(value) if isinstance(value, str) else dict(value)
+    commands = data.pop("CMND", "")
+    connector = _connector()
+    changed = _ensure(connector, "Template", json.dumps(data, separators=(",", ":")))
+    if activate:
+        changed = _ensure(connector, "Module", 0) or changed
+        commands = re.sub(r"^\s*backlog\s+", "", commands, flags=re.IGNORECASE)
+        for command in commands.split("|"):
+            parts = command.split(None, 1)
+            if not parts:
+                continue
+            subject = parts[0]
+            payload = parts[1].strip() if len(parts) > 1 else ""
+            changed = _ensure(connector, subject, payload) or changed
+    if changed:
         yield _marker()
 
 
