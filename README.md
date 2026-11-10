@@ -31,17 +31,18 @@ apply()
 ```
 
 `cmnd` takes any number of commands as keyword arguments. A value is either a
-single value or a list of values. A list sends the command once per value, in
-order, for commands that must be sent more than once, such as `Rule1`:
+single value or a list of values. A list ensures each value in order, which
+suits commands that carry more than one value, such as `Interlock 1,2` and
+`Interlock ON`:
 
 ```py
-cmnd(Rule1=["ON clock DO power ENDON", "1"], SetOption114=1)
+cmnd(Interlock=["1,2", "ON"], SetOption114=1)
 ```
 
 `cmnd` compares each desired value with the cache. It reads the current value
 from the device if the setting is not cached, and records a pending change
-only if the value differs. List values are never diffed, so they always
-apply. Every command is sent by `apply`, or on disconnect as a safety net.
+only if the value differs. Every command is sent by `apply`, or on disconnect
+as a safety net.
 
 Command names are matched case-insensitively and resolve the `SO` alias of
 `SetOption`, so `SetOption114`, `setoption114`, and `so114` are the same
@@ -100,7 +101,8 @@ The key holds a mapping of command name to a value or a list of values. The
 deploy ensures each command and then calls `apply`.
 
 `Rule<x>` keys are handled like the `rule` operation rather than as ordinary
-commands: the value is the rule text, or a mapping with `code` and the flags
+commands. The value is the rule text, a list of the text followed by flag
+payloads (`Rule1: [code, "1"]`), or a mapping with `code` and the flags
 (`enabled`, `once`, `stop_on_error`, `append`). Their text is sent directly,
 because it can contain semicolons.
 

@@ -70,13 +70,14 @@ class TestEnsureHostData:
         with pytest.raises(TypeError):
             list(ensure_host_data._inner())
 
-    def test_list_value_is_queued(self, use_connector, status0):
+    def test_list_value_is_diffed(self, use_connector, status0):
+        # SetOption114 is cached as 0, so only the 1 needs sending.
         connector = use_connector(
             {"Status 0": status0, "Status 13": []},
             data={"tasmota": {"SetOption114": [0, 1]}},
         )
         assert len(list(ensure_host_data._inner())) == 1
-        assert list(connector._pending) == [("setoption114", "0"), ("setoption114", "1")]
+        assert list(connector._pending) == [("setoption114", "1")]
 
     def test_rule_code_is_sent_directly(self, use_connector, status0):
         def handler(cmnd):
@@ -93,6 +94,27 @@ class TestEnsureHostData:
         assert len(commands) == 1
         assert commands[0].execute(None, FakeHost(connector), {}) is True
         assert any("Rule1+ON+x+DO+y+ENDON" in url for url in connector.session.requests)
+
+    def test_rule_list_is_code_and_flags(self, use_connector, status0):
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 13":
+                return {}
+            if cmnd == "Rule1":
+                return {"Rule1": {"State": "OFF", "Rules": ""}}
+            return {}
+
+        connector = use_connector(handler, data={"tasmota": {"Rule1": ["ON x DO y ENDON", "1"]}})
+        commands = list(ensure_host_data._inner())
+        assert len(commands) == 1
+        assert commands[0].execute(None, FakeHost(connector), {}) is True
+        assert any("Rule1+ON+x+DO+y+ENDON" in url for url in connector.session.requests)
+        assert ("rule1", "1") in connector._pending
+
+    def test_rule_empty_list_yields_nothing(self, use_connector, status0):
+        use_connector({"Status 0": status0, "Status 13": []}, data={"tasmota": {"Rule1": []}})
+        assert list(ensure_host_data._inner()) == []
 
     def test_rule_mapping_sets_flags(self, use_connector, status0):
         responses = {
@@ -193,11 +215,11 @@ class TestCmnd:
         assert len(list(cmnd._inner(Rule1=["ON", "1"]))) == 1
         assert list(connector._pending) == [("rule1", "ON"), ("rule1", "1")]
 
-    def test_list_value_is_never_diffed(self, use_connector, status0):
-        # Power is cached as OFF, but a list is a sequence and is always sent.
+    def test_list_value_is_diffed(self, use_connector, status0):
+        # Power is cached as OFF, so only the "on" needs sending.
         connector = use_connector({"Status 0": status0, "Status 13": []})
         assert len(list(cmnd._inner(Power=["off", "on"]))) == 1
-        assert list(connector._pending) == [("power", "off"), ("power", "on")]
+        assert list(connector._pending) == [("power", "on")]
 
     def test_tuple_value_is_treated_as_a_list(self, use_connector, status0):
         connector = use_connector({"Status 0": status0, "Status 13": []})
@@ -578,20 +600,22 @@ class TestVerbosityLogging:
             "tasmota.example.org: Password1 is masked, setting unconditionally" in caplog.messages
         )
 
-    def test_level_two_logs_queued_sequence(self, use_connector, status0, caplog):
+    def test_level_two_logs_list_values(self, use_connector, status0, caplog):
         connector = use_connector({"Status 0": status0, "Status 13": []})
         connector.state = make_state(2)
         with caplog.at_level(logging.INFO):
-            list(cmnd._inner(Rule1=["ON", "1"]))
-        assert "tasmota.example.org: Rule1 queued ON" in caplog.messages
-        assert "tasmota.example.org: Rule1 queued 1" in caplog.messages
+            list(cmnd._inner(SetOption114=[0, 1]))
+        assert "tasmota.example.org: SetOption114 is already 0, skipping" in caplog.messages
+        assert "tasmota.example.org: SetOption114 is 0, will set to 1" in caplog.messages
 
-    def test_level_two_masks_queued_secret(self, use_connector, status0, caplog):
+    def test_level_two_masks_secret(self, use_connector, status0, caplog):
         connector = use_connector({"Status 0": status0, "Status 13": []})
         connector.state = make_state(2)
         with caplog.at_level(logging.INFO):
             list(cmnd._inner(Password1=["hunter2"]))
-        assert "tasmota.example.org: Password1 queued ***" in caplog.messages
+        assert (
+            "tasmota.example.org: Password1 is masked, setting unconditionally" in caplog.messages
+        )
         assert not any("hunter2" in message for message in caplog.messages)
 
     def test_level_two_logs_unknown_state(self, use_connector, status0, caplog):

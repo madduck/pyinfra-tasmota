@@ -27,10 +27,9 @@ def cmnd(**kwargs: Any) -> Generator[PyinfraCommand, None, None]:
     example ``cmnd(SetOption114=1, Power="toggle")``. Command names are
     matched case-insensitively and resolve the ``SO`` alias of ``SetOption``.
 
-    A value is either a single value or a list of values. A list sends the
-    command once per value, in order, which suits commands that must be sent
-    more than once, such as ``Rule1``. List values are never diffed, because a
-    sequence has no single cached value to compare against.
+    A value is either a single value or a list of values. A list ensures each
+    value in order, which suits commands that carry more than one value, such
+    as ``Interlock 1,2`` and ``Interlock ON``.
 
     For each command whose cached value already equals the desired value, no
     change is recorded. If a value is not cached, the current value is read
@@ -89,14 +88,12 @@ def ensure_host_data(
     for subject, value in commands.items():
         if is_rule(subject):
             index = _rule_index(subject)
-            send_code, rule_changed = _ensure_rule(connector, index, **_rule_spec(value))
+            send_code, rule_changed = _ensure_rule_value(connector, index, value)
             if send_code is not None:
                 rule_sends.append((f"Rule{index}", send_code))
             changed = rule_changed or changed
-        elif isinstance(value, (list, tuple)):
-            changed = _queue_sequence(connector, subject, value) or changed
         else:
-            changed = _ensure(connector, subject, value) or changed
+            changed = _ensure_any(connector, subject, value) or changed
 
     for subject, value in rule_sends:
         yield _send_rule(subject, value)
@@ -244,14 +241,25 @@ def _rule_index(subject: str) -> int:
     return int(_canonical(subject)[len("rule") :])
 
 
-def _rule_spec(value: Any) -> dict[str, Any]:
-    """Return the ``rule`` arguments for a host-data value.
+def _ensure_rule_value(
+    connector: TasmotaConnector, index: int, value: Any
+) -> tuple[str | None, bool]:
+    """Ensure a rule set from a host-data value.
 
-    A mapping is used as keyword arguments; anything else is the rule text.
+    The value is the rule text, a list of the text followed by flag payloads,
+    or a mapping of the ``rule`` arguments.
     """
     if isinstance(value, dict):
-        return dict(value)
-    return {"code": value}
+        return _ensure_rule(connector, index, **value)
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return None, False
+        code, *flags = value
+        send_code, changed = _ensure_rule(connector, index, code)
+        for flag in flags:
+            changed = _ensure(connector, f"Rule{index}", flag) or changed
+        return send_code, changed
+    return _ensure_rule(connector, index, value)
 
 
 def _send_rule(subject: str, value: str) -> PyinfraCommand:
@@ -270,24 +278,21 @@ def _ensure_all(connector: TasmotaConnector, commands: Mapping[str, Any]) -> boo
     """Ensure a mapping of commands, returning whether any change was recorded."""
     changed = False
     for subject, value in commands.items():
-        if isinstance(value, (list, tuple)):
-            changed = _queue_sequence(connector, subject, value) or changed
-        else:
-            changed = _ensure(connector, subject, value) or changed
+        changed = _ensure_any(connector, subject, value) or changed
     return changed
 
 
-def _queue_sequence(
-    connector: TasmotaConnector, subject: str, values: list[Any] | tuple[Any, ...]
-) -> bool:
-    """Queue a command once per value, in order, without diffing."""
-    for one in values:
-        connector.record(subject, str(one))
-        if connector.executing:
-            connector.log_at(
-                2, "%s: %s queued %s", connector.host.name, subject, redact(subject, one)
-            )
-    return bool(values)
+def _ensure_any(connector: TasmotaConnector, subject: str, value: Any) -> bool:
+    """Ensure one command, whose value may be a list of values.
+
+    A list ensures each value in order, skipping the ones that already match.
+    """
+    if isinstance(value, (list, tuple)):
+        changed = False
+        for element in value:
+            changed = _ensure(connector, subject, element) or changed
+        return changed
+    return _ensure(connector, subject, value)
 
 
 def _needs_change(connector: TasmotaConnector, subject: str, value: Any) -> bool:
