@@ -26,16 +26,14 @@ Deploy:
 ```py
 from pyinfra_tasmota.operations import apply, cmnd
 
-cmnd("SetOption114", 1)
-cmnd("SetOption120", 0)
+cmnd(SetOption114=1, SetOption120=0, Power="toggle")
 apply()
 ```
 
-The connector pulls `Status 0` and `Status 13` at connect, which populates a
-cache of the device settings. `cmnd` compares the desired value with the
-cache. It reads the current value from the device if the setting is not
-cached, and records a pending change only if the value differs. Every command
-is sent by `apply`, or on disconnect as a safety net.
+`cmnd` takes any number of commands as keyword arguments. It compares each
+desired value with the cache. It reads the current value from the device if
+the setting is not cached, and records a pending change only if the value
+differs. Every command is sent by `apply`, or on disconnect as a safety net.
 
 Command names are matched case-insensitively and resolve the `SO` alias of
 `SetOption`, so `SetOption114`, `setoption114`, and `so114` are the same

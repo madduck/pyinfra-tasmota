@@ -28,11 +28,29 @@ def use_connector(monkeypatch, make_connector):
 class TestCmnd:
     def test_no_change_yields_nothing(self, use_connector, status0):
         use_connector({"Status 0": status0, "Status 13": []})
-        assert list(cmnd._inner("SetOption114", 0)) == []
+        assert list(cmnd._inner(SetOption114=0)) == []
 
     def test_change_yields_one_command(self, use_connector, status0):
         use_connector({"Status 0": status0, "Status 13": []})
-        assert len(list(cmnd._inner("SetOption114", 1))) == 1
+        assert len(list(cmnd._inner(SetOption114=1))) == 1
+
+    def test_no_commands_yields_nothing(self, use_connector, status0):
+        use_connector({"Status 0": status0, "Status 13": []})
+        assert list(cmnd._inner()) == []
+
+    def test_multiple_commands_no_change(self, use_connector, status0):
+        use_connector({"Status 0": status0, "Status 13": []})
+        assert list(cmnd._inner(SetOption114=0, Module=1)) == []
+
+    def test_multiple_commands_some_change(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        assert len(list(cmnd._inner(SetOption114=1, Module=1))) == 1
+        assert set(connector._pending) == {"setoption114"}
+
+    def test_multiple_commands_all_change(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        assert len(list(cmnd._inner(SetOption114=1, Power="on"))) == 1
+        assert set(connector._pending) == {"setoption114", "power"}
 
     def test_unknown_reads_current_then_skips(self, use_connector, status0):
         connector = use_connector(
@@ -42,7 +60,7 @@ class TestCmnd:
                 "SetOption120": {"SetOption120": 1},
             }
         )
-        assert list(cmnd._inner("SetOption120", 1)) == []
+        assert list(cmnd._inner(SetOption120=1)) == []
         assert connector.current("SetOption120") == "1"
 
     def test_unknown_reads_current_then_changes(self, use_connector, status0):
@@ -53,29 +71,29 @@ class TestCmnd:
                 "SetOption120": {"SetOption120": 0},
             }
         )
-        assert len(list(cmnd._inner("SetOption120", 1))) == 1
+        assert len(list(cmnd._inner(SetOption120=1))) == 1
         assert connector.current("SetOption120") == "0"
 
     def test_unknown_and_unreadable_yields_command(self, use_connector, status0):
         connector = use_connector({"Status 0": status0, "Status 13": []})
-        assert len(list(cmnd._inner("SetOption120", 1))) == 1
+        assert len(list(cmnd._inner(SetOption120=1))) == 1
         assert connector.current("SetOption120") is None
 
     def test_case_insensitive_compare(self, use_connector, status0):
         status0["Status"]["Power"] = "ON"
         use_connector({"Status 0": status0, "Status 13": []})
-        assert list(cmnd._inner("Power", "on")) == []
+        assert list(cmnd._inner(Power="on")) == []
 
     def test_reboot_command_is_not_read(self, use_connector, status0):
         connector = use_connector({"Status 0": status0, "Status 13": []})
         before = len(connector.session.requests)
-        assert len(list(cmnd._inner("Restart", 1))) == 1
+        assert len(list(cmnd._inner(Restart=1))) == 1
         assert len(connector.session.requests) == before
         assert connector._pending == {"restart": ("Restart", "1")}
 
     def test_records_desired_value_and_yields_marker(self, use_connector, status0):
         connector = use_connector({"Status 0": status0, "Status 13": []})
-        command = next(iter(cmnd._inner("SetOption114", 1)))
+        command = next(iter(cmnd._inner(SetOption114=1)))
         assert connector._pending == {"setoption114": ("SetOption114", "1")}
         assert command.execute(None, FakeHost(connector), {}) is True
 
@@ -89,16 +107,16 @@ class TestCmnd:
                 "Unknown": {"First": 1, "Second": 2},
             }
         )
-        assert len(list(cmnd._inner("Unknown", "x"))) == 1
+        assert len(list(cmnd._inner(Unknown="x"))) == 1
         assert connector.current("Unknown") is None
 
     def test_read_current_handles_non_dict_reply(self, use_connector, status0):
         use_connector({"Status 0": status0, "Status 13": [], "SetOption120": "nope"})
-        assert len(list(cmnd._inner("SetOption120", 1))) == 1
+        assert len(list(cmnd._inner(SetOption120=1))) == 1
 
     def test_read_current_rejects_command_error(self, use_connector, status0):
         use_connector({"Status 0": status0, "Status 13": [], "SetOption120": {"Command": "Error"}})
-        assert len(list(cmnd._inner("SetOption120", 1))) == 1
+        assert len(list(cmnd._inner(SetOption120=1))) == 1
 
     def test_read_current_resolves_alias(self, use_connector, status0):
         # so114 is answered as SetOption114; the lone scalar resolves it.
@@ -110,7 +128,7 @@ class TestCmnd:
                 "so114": {"SetOption114": "OFF"},
             }
         )
-        assert list(cmnd._inner("so114", 0)) == []
+        assert list(cmnd._inner(so114=0)) == []
         assert connector.current("SetOption114") == "OFF"
 
     def test_read_current_accepts_lone_scalar(self, use_connector, status0):
@@ -120,7 +138,7 @@ class TestCmnd:
         connector = use_connector(
             {"Status 0": status0, "Status 13": [], "Weird": {"SomethingElse": 1}}
         )
-        assert list(cmnd._inner("Weird", 1)) == []
+        assert list(cmnd._inner(Weird=1)) == []
         assert connector.current("SomethingElse") == "1"
 
     def test_value_folding_treats_off_as_zero(self, use_connector, status0):
@@ -132,8 +150,8 @@ class TestCmnd:
                 "SetOption114": {"SetOption114": "OFF"},
             }
         )
-        assert list(cmnd._inner("SetOption114", 0)) == []
-        assert list(cmnd._inner("SetOption114", "off")) == []
+        assert list(cmnd._inner(SetOption114=0)) == []
+        assert list(cmnd._inner(SetOption114="off")) == []
 
     def test_value_folding_treats_on_as_one(self, use_connector, status0):
         status0["Status"].pop("SetOption114", None)
@@ -144,16 +162,16 @@ class TestCmnd:
                 "SetOption114": {"SetOption114": "ON"},
             }
         )
-        assert list(cmnd._inner("SetOption114", 1)) == []
-        assert list(cmnd._inner("SetOption114", "on")) == []
+        assert list(cmnd._inner(SetOption114=1)) == []
+        assert list(cmnd._inner(SetOption114="on")) == []
 
     def test_alias_and_case_match_cached_value(self, use_connector, status0):
         # SetOption114 is already 0 in the cache; both spellings report no change
         # without reaching the device.
         connector = use_connector({"Status 0": status0, "Status 13": []})
         before = len(connector.session.requests)
-        assert list(cmnd._inner("so114", 0)) == []
-        assert list(cmnd._inner("setoption114", "off")) == []
+        assert list(cmnd._inner(so114=0)) == []
+        assert list(cmnd._inner(setoption114="off")) == []
         assert len(connector.session.requests) == before
 
 

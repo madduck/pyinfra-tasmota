@@ -19,40 +19,48 @@ if TYPE_CHECKING:
 
 
 @operation()
-def cmnd(subject: str, value: Any) -> Generator[PyinfraCommand, None, None]:
-    """Set a Tasmota command value, if it differs from the device.
+def cmnd(**kwargs: Any) -> Generator[PyinfraCommand, None, None]:
+    """Set Tasmota command values, if they differ from the device.
 
-    The operation records the desired value against the connector's pending
-    set. If the cached value already equals ``value``, the operation yields no
-    command and pyinfra reports "No changes". If the value is not cached, the
-    current value is read from the device over HTTP and cached before the
-    comparison. Recording happens while the command generator runs, so the
-    change is visible during the prepare step and to ``--dry``.
+    Each keyword argument is a command name and its desired value, for
+    example ``cmnd(SetOption114=1, Power="toggle")``. Command names are
+    matched case-insensitively and resolve the ``SO`` alias of ``SetOption``.
+
+    For each command whose cached value already equals the desired value, no
+    change is recorded. If a value is not cached, the current value is read
+    from the device over HTTP and cached before the comparison. Recording
+    happens while the command generator runs, so changes are visible during
+    the prepare step and to ``--dry``.
 
     Reboot-triggering commands are never read: sending such a command to learn
     its value is meaningless and may act on the device.
 
-    The recorded command is sent by the ``apply`` operation, or on disconnect.
+    The recorded commands are sent by the ``apply`` operation, or on
+    disconnect.
 
     Args:
-        subject: The Tasmota command name, for example ``SetOption114``.
-        value: The desired value, for example ``1`` or ``on``.
+        **kwargs: Tasmota command names mapped to desired values.
 
     Yields:
-        At most one marker command when the value must change.
+        At most one marker command when any value must change.
     """
     connector = _connector()
-    desired = str(value)
+    changed = False
+    for subject, value in kwargs.items():
+        desired = str(value)
 
-    current = connector.current(subject)
-    if current is None and _canonical(subject) not in REBOOT_COMMANDS:
-        current = _read_current(connector, subject)
+        current = connector.current(subject)
+        if current is None and _canonical(subject) not in REBOOT_COMMANDS:
+            current = _read_current(connector, subject)
 
-    if current is not None and _normalize(current) == _normalize(desired):
-        return
+        if current is not None and _normalize(current) == _normalize(desired):
+            continue
 
-    connector.record(subject, desired)
-    yield _marker()
+        connector.record(subject, desired)
+        changed = True
+
+    if changed:
+        yield _marker()
 
 
 @operation()
