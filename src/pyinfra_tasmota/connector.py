@@ -100,7 +100,10 @@ class TasmotaConnector(BaseConnector):
         super().__init__(state, host)
         self.session = requests.Session()
         self._cache: dict[str, Any] = {}
-        self._pending: dict[str, tuple[str, str]] = {}
+        # Maps (canonical command, value) to the subject as given. A command
+        # may therefore be queued with several values (in order), while a
+        # repeated identical command collapses to one.
+        self._pending: dict[tuple[str, str], str] = {}
 
     @property
     def verbosity(self) -> int:
@@ -246,10 +249,13 @@ class TasmotaConnector(BaseConnector):
     def record(self, subject: str, value: Any) -> None:
         """Record a command to be sent during the next flush.
 
-        Commands are keyed canonically, so ``SetOption114`` and ``so114`` do
-        not both queue. The subject is kept as given for the wire command.
+        Commands are keyed canonically and by value, so one command can be
+        queued with several values while a repeated identical command
+        collapses. This also stops the two generator passes (change detection
+        and execution) from queueing the same command twice. The subject is
+        kept as given for the wire command.
         """
-        self._pending[_canonical(subject)] = (str(subject), str(value))
+        self._pending[(_canonical(subject), str(value))] = str(subject)
 
     def has_pending(self) -> bool:
         """Return whether any command is waiting to be flushed."""
@@ -281,8 +287,16 @@ class TasmotaConnector(BaseConnector):
         pending = dict(self._pending)
         self._pending.clear()
 
-        immediate = [command for key, command in pending.items() if key not in REBOOT_COMMANDS]
-        reboots = [command for key, command in pending.items() if key in REBOOT_COMMANDS]
+        immediate = [
+            (subject, value)
+            for (canonical, value), subject in pending.items()
+            if canonical not in REBOOT_COMMANDS
+        ]
+        reboots = [
+            (subject, value)
+            for (canonical, value), subject in pending.items()
+            if canonical in REBOOT_COMMANDS
+        ]
 
         self.log_at(
             3,

@@ -26,6 +26,11 @@ def cmnd(**kwargs: Any) -> Generator[PyinfraCommand, None, None]:
     example ``cmnd(SetOption114=1, Power="toggle")``. Command names are
     matched case-insensitively and resolve the ``SO`` alias of ``SetOption``.
 
+    A value is either a single value or a list of values. A list sends the
+    command once per value, in order, which suits commands that must be sent
+    more than once, such as ``Rule1``. List values are never diffed, because a
+    sequence has no single cached value to compare against.
+
     For each command whose cached value already equals the desired value, no
     change is recorded. If a value is not cached, the current value is read
     from the device over HTTP and cached before the comparison. Recording
@@ -39,7 +44,7 @@ def cmnd(**kwargs: Any) -> Generator[PyinfraCommand, None, None]:
     disconnect.
 
     Args:
-        **kwargs: Tasmota command names mapped to desired values.
+        **kwargs: Tasmota command names mapped to a value or list of values.
 
     Yields:
         At most one marker command when any value must change.
@@ -47,6 +52,14 @@ def cmnd(**kwargs: Any) -> Generator[PyinfraCommand, None, None]:
     connector = _connector()
     changed = False
     for subject, value in kwargs.items():
+        if isinstance(value, (list, tuple)):
+            for one in value:
+                connector.record(subject, str(one))
+                if connector.executing:
+                    connector.log_at(2, "%s: %s queued %s", connector.host.name, subject, one)
+                changed = True
+            continue
+
         desired = str(value)
 
         current = connector.current(subject)

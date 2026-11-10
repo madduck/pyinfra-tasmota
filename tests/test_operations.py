@@ -47,12 +47,12 @@ class TestCmnd:
     def test_multiple_commands_some_change(self, use_connector, status0):
         connector = use_connector({"Status 0": status0, "Status 13": []})
         assert len(list(cmnd._inner(SetOption114=1, Module=1))) == 1
-        assert set(connector._pending) == {"setoption114"}
+        assert set(connector._pending) == {("setoption114", "1")}
 
     def test_multiple_commands_all_change(self, use_connector, status0):
         connector = use_connector({"Status 0": status0, "Status 13": []})
         assert len(list(cmnd._inner(SetOption114=1, Power="on"))) == 1
-        assert set(connector._pending) == {"setoption114", "power"}
+        assert set(connector._pending) == {("setoption114", "1"), ("power", "on")}
 
     def test_unknown_reads_current_then_skips(self, use_connector, status0):
         connector = use_connector(
@@ -91,13 +91,35 @@ class TestCmnd:
         before = len(connector.session.requests)
         assert len(list(cmnd._inner(Restart=1))) == 1
         assert len(connector.session.requests) == before
-        assert connector._pending == {"restart": ("Restart", "1")}
+        assert connector._pending == {("restart", "1"): "Restart"}
 
     def test_records_desired_value_and_yields_marker(self, use_connector, status0):
         connector = use_connector({"Status 0": status0, "Status 13": []})
         command = next(iter(cmnd._inner(SetOption114=1)))
-        assert connector._pending == {"setoption114": ("SetOption114", "1")}
+        assert connector._pending == {("setoption114", "1"): "SetOption114"}
         assert command.execute(None, FakeHost(connector), {}) is True
+
+    def test_list_value_queues_each_in_order(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        assert len(list(cmnd._inner(Rule1=["ON", "1"]))) == 1
+        assert list(connector._pending) == [("rule1", "ON"), ("rule1", "1")]
+
+    def test_list_value_is_never_diffed(self, use_connector, status0):
+        # Power is cached as OFF, but a list is a sequence and is always sent.
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        assert len(list(cmnd._inner(Power=["off", "on"]))) == 1
+        assert list(connector._pending) == [("power", "off"), ("power", "on")]
+
+    def test_tuple_value_is_treated_as_a_list(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        assert len(list(cmnd._inner(Rule1=("ON", "1")))) == 1
+        assert list(connector._pending) == [("rule1", "ON"), ("rule1", "1")]
+
+    def test_repeated_identical_command_collapses(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        list(cmnd._inner(SetOption114=1))
+        list(cmnd._inner(SetOption114=1))
+        assert list(connector._pending) == [("setoption114", "1")]
 
     def test_read_current_rejects_multiple_unmatched_scalars(self, use_connector, status0):
         # Two scalar values and no canonical match: the read cannot decide, so
@@ -227,6 +249,14 @@ class TestVerbosityLogging:
             list(cmnd._inner(SetOption120=1))
         assert "tasmota.example.org: read SetOption120 as 0" in caplog.messages
         assert "tasmota.example.org: SetOption120 is 0, will set to 1" in caplog.messages
+
+    def test_level_two_logs_queued_sequence(self, use_connector, status0, caplog):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        connector.state = make_state(2)
+        with caplog.at_level(logging.INFO):
+            list(cmnd._inner(Rule1=["ON", "1"]))
+        assert "tasmota.example.org: Rule1 queued ON" in caplog.messages
+        assert "tasmota.example.org: Rule1 queued 1" in caplog.messages
 
     def test_level_two_logs_unknown_state(self, use_connector, status0, caplog):
         connector = use_connector({"Status 0": status0, "Status 13": []})

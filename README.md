@@ -30,10 +30,18 @@ cmnd(SetOption114=1, SetOption120=0, Power="toggle")
 apply()
 ```
 
-`cmnd` takes any number of commands as keyword arguments. It compares each
-desired value with the cache. It reads the current value from the device if
-the setting is not cached, and records a pending change only if the value
-differs. Every command is sent by `apply`, or on disconnect as a safety net.
+`cmnd` takes any number of commands as keyword arguments. A value is either a
+single value or a list of values. A list sends the command once per value, in
+order, for commands that must be sent more than once, such as `Rule1`:
+
+```py
+cmnd(Rule1=["ON clock DO power ENDON", "1"], SetOption114=1)
+```
+
+`cmnd` compares each desired value with the cache. It reads the current value
+from the device if the setting is not cached, and records a pending change
+only if the value differs. List values are never diffed, so they always
+apply. Every command is sent by `apply`, or on disconnect as a safety net.
 
 Command names are matched case-insensitively and resolve the `SO` alias of
 `SetOption`, so `SetOption114`, `setoption114`, and `so114` are the same
@@ -43,6 +51,31 @@ of `OFF`, and `1` matches `ON`.
 Non-rebooting commands are flushed as `Backlog0` batches, split to stay
 within Tasmota's limit of 30 commands and decode-config's limit of 320
 characters per command line. Reboot-triggering commands are sent on their own.
+
+## Deploy
+
+The package ships a deploy that ensures everything under the `tasmota`
+host-data key:
+
+```py
+# deploy.py
+from pyinfra_tasmota import tasmota
+
+tasmota()
+```
+
+```py
+# inventory.py
+hosts = (
+    ["@tasmota/tasmota.example.org"],
+    {
+        "tasmota": {"SetOption114": 1, "Rule1": ["ON clock DO power ENDON", "1"]},
+    },
+)
+```
+
+The key holds a mapping of command name to a value or a list of values. The
+deploy ensures each command and then calls `apply`.
 
 ## Reboots
 
