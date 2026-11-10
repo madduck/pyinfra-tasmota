@@ -1,14 +1,8 @@
 __pycache__/
 *.py[cod]
-.venv/
-venv/
+/.venv/
 .coverage
-coverage.xml
-htmlcov/
-.mypy_cache/
-.ruff_cache/
-.pytest_cache/
+.*_cache/
 dist/
 build/
 *.egg-info/
-.worktrees/
