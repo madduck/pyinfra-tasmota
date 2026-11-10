@@ -1,0 +1,297 @@
+"""A Pyinfra execution connector for Tasmota devices.
+
+The connector talks to a Tasmota device through its HTTP API. On connect it
+pulls a status dump to populate a cache of the device settings. Operations
+record their intent against that cache, and the pending commands are flushed
+to the device as ``Backlog0`` batches on disconnect.
+
+Tasmota writes every changed setting to flash. To avoid wear, a flush wraps
+its commands in ``SaveData 0`` (no automatic flash writes) followed by
+``SaveData 1`` (restore automatic writes). Because ``SaveData`` is persisted
+immediately and survives a reboot, the connector also checks and repairs it
+during connect.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode
+
+import requests
+from pyinfra import logger
+from pyinfra.api.exceptions import ConnectError, InventoryError
+from pyinfra.connectors.base import BaseConnector, ConnectorData, DataMeta
+from pyinfra.connectors.util import CommandOutput
+from typing_extensions import Unpack
+
+if TYPE_CHECKING:
+    from pyinfra.api.arguments import ConnectorArguments
+    from pyinfra.api.command import StringCommand
+
+
+log = logger.getChild("pyinfra-tasmota")
+
+# Tasmota's Backlog accepts at most this many commands. One slot is reserved
+# for the SaveData guard, so a batch carries at most this many real commands.
+BACKLOG_MAX_COMMANDS = 30
+
+# A handful of Tasmota commands restart the device (or its networking stack).
+# The connector cannot apply further commands until the device is back, so
+# these are isolated into their own batch and applied last.
+REBOOT_COMMANDS = frozenset(
+    {
+        "ap",
+        "devgroupname",
+        "hostname",
+        "ipaddress",
+        "module",
+        "mqttclient",
+        "mqttfulltopic",
+        "mqtthost",
+        "mqttpassword",
+        "mqttport",
+        "mqttuser",
+        "prefix",
+        "reset",
+        "restart",
+        "ssid",
+        "sta",
+        "template",
+        "upgrade",
+        "upload",
+    }
+)
+
+
+class TasmotaConnectorData(ConnectorData):
+    """Connector data accepted per host in the inventory."""
+
+    tasmota_friendly_name: str
+
+
+data_meta: dict[str, DataMeta] = {
+    "tasmota_friendly_name": DataMeta("Optional human-readable device name, for logging only"),
+}
+
+
+class TasmotaConnector(BaseConnector):
+    """Execute operations against a Tasmota device over HTTP."""
+
+    handles_execution = True
+    data_cls = TasmotaConnectorData
+    data_meta = data_meta
+
+    def __init__(self, state: Any, host: Any) -> None:
+        """Initialise the connector and its HTTP session."""
+        super().__init__(state, host)
+        self.session = requests.Session()
+        self._cache: dict[str, Any] = {}
+        self._pending: list[tuple[str, str]] = []
+        self._flushed = False
+
+    @staticmethod
+    def make_names_data(name: str | None = None) -> Any:
+        """Yield the Tasmota host described by ``name``.
+
+        Args:
+            name: A ``host`` or ``host:port`` string, optionally prefixed with
+                ``http://`` or ``https://``.
+
+        Yields:
+            A ``(name, data, groups)`` tuple describing the host.
+
+        Raises:
+            InventoryError: If no host name is given.
+        """
+        if not name:
+            raise InventoryError("No Tasmota host provided!")
+
+        host, port = _split_host_port(name)
+
+        yield (
+            name,
+            {"tasmota_host": host, "tasmota_port": port},
+            ["tasmota"],
+        )
+
+    # -- Connection lifecycle -------------------------------------------------
+
+    def connect(self) -> None:
+        """Fetch a status dump and populate the settings cache.
+
+        Raises:
+            ConnectError: If the device cannot be reached or answers with an
+                unexpected payload.
+        """
+        status = self._request("Status 0")
+        if not isinstance(status, dict) or "Status" not in status:
+            raise ConnectError(f"Unexpected status response from {self.host.name!r}")
+
+        self._cache = {}
+        for value in status.values():
+            if isinstance(value, dict):
+                self._cache.update(value)
+
+        shutters = self._request("Status 13", allow_missing=True)
+        if isinstance(shutters, dict):
+            for value in shutters.values():
+                if isinstance(value, dict):
+                    self._cache.update(value)
+
+        self._repair_savedata()
+
+        log.debug("%s: cached %d settings", self.host.name, len(self._cache))
+
+    def disconnect(self) -> None:
+        """Flush any pending commands and close the HTTP session."""
+        try:
+            self.apply()
+        finally:
+            self.session.close()
+
+    # -- HTTP helpers ---------------------------------------------------------
+
+    def _url(self, cmnd: str) -> str:
+        query = urlencode({"cmnd": cmnd})
+        scheme = self.host.data.get("tasmota_scheme", "http")
+        host = self.host.data.get("tasmota_host", self.host.name)
+        port = self.host.data.get("tasmota_port", 80)
+        return f"{scheme}://{host}:{port}/cm?{query}"
+
+    def _request(self, cmnd: str, allow_missing: bool = False) -> Any:
+        url = self._url(cmnd)
+        try:
+            response = self.session.get(url, timeout=30)
+            response.raise_for_status()
+        except requests.RequestException as err:
+            if allow_missing:
+                return None
+            raise ConnectError(f"Request to {url!r} failed: {err}") from err
+
+        try:
+            return response.json()
+        except ValueError as err:
+            if allow_missing:
+                return None
+            raise ConnectError(f"Invalid JSON from {url!r}: {err}") from err
+
+    # -- Intent recording -----------------------------------------------------
+
+    def record(self, subject: str, value: Any) -> None:
+        """Record a command to be sent during the next flush."""
+        self._pending.append((str(subject), str(value)))
+
+    def current(self, subject: str) -> str | None:
+        """Return the cached value of ``subject`` or ``None`` if unknown.
+
+        The lookup is case-insensitive because Tasmota command names are.
+        """
+        for key, value in self._cache.items():
+            if key.lower() == subject.lower():
+                return str(value)
+        return None
+
+    def cache(self, subject: str, value: Any) -> None:
+        """Store ``value`` for ``subject`` in the settings cache."""
+        self._cache[subject] = value
+
+    def request(self, cmnd: str, allow_missing: bool = False) -> Any:
+        """Send ``cmnd`` to the device and return the parsed JSON reply."""
+        return self._request(cmnd, allow_missing=allow_missing)
+
+    # -- Flushing -------------------------------------------------------------
+
+    def apply(self) -> None:
+        """Send all pending commands to the device, in safe batches."""
+        if self._flushed or not self._pending:
+            self._flushed = True
+            return
+
+        pending = list(self._pending)
+        self._pending.clear()
+
+        immediate = [c for c in pending if c[0].lower() not in REBOOT_COMMANDS]
+        reboots = [c for c in pending if c[0].lower() in REBOOT_COMMANDS]
+
+        for batch in _chunk(immediate, BACKLOG_MAX_COMMANDS - 1):
+            self._send_backlog(batch)
+
+        for command in reboots:
+            self._send_backlog([command], reboot=True)
+
+        self._flushed = True
+
+    def _send_backlog(self, batch: list[tuple[str, str]], reboot: bool = False) -> None:
+        parts = ["SaveData 0", *(f"{subject} {value}" for subject, value in batch), "SaveData 1"]
+        self._request("Backlog0 " + ";".join(parts))
+        if reboot:
+            self._await_reboot()
+        for subject, value in batch:
+            self._cache[subject] = value
+
+    def _await_reboot(self) -> None:
+        raise NotImplementedError("Reboot awaiting is not implemented yet")
+
+    def _repair_savedata(self) -> None:
+        if self._cache.get("SaveData") == 0:
+            log.warning("%s: repairing stuck SaveData 0", self.host.name)
+            self._request("SaveData 1")
+        elif "SaveData" not in self._cache:
+            log.debug("%s: device does not expose SaveData", self.host.name)
+
+    # -- Unsupported execution surface ---------------------------------------
+
+    def run_shell_command(
+        self,
+        command: StringCommand,
+        print_output: bool = False,
+        print_input: bool = False,
+        **arguments: Unpack[ConnectorArguments],
+    ) -> tuple[bool, CommandOutput]:
+        """Tasmota devices do not expose a shell."""
+        raise NotImplementedError("The Tasmota connector does not support shell commands")
+
+    def put_file(
+        self,
+        filename_or_io: Any,
+        remote_filename: str,
+        remote_temp_filename: str | None = None,
+        print_output: bool = False,
+        print_input: bool = False,
+        **arguments: Unpack[ConnectorArguments],
+    ) -> bool:
+        """Tasmota devices do not accept arbitrary file uploads."""
+        raise NotImplementedError("The Tasmota connector does not support file uploads")
+
+    def get_file(
+        self,
+        remote_filename: str,
+        filename_or_io: Any,
+        remote_temp_filename: str | None = None,
+        print_output: bool = False,
+        print_input: bool = False,
+        **arguments: Unpack[ConnectorArguments],
+    ) -> bool:
+        """Tasmota devices do not expose an arbitrary file system."""
+        raise NotImplementedError("The Tasmota connector does not support file downloads")
+
+
+def _split_host_port(name: str) -> tuple[str, int]:
+    """Split a connector target into a host and a port."""
+    host_part = name
+    port = 80
+    if "://" in host_part:
+        scheme, _, host_part = host_part.partition("://")
+        if scheme == "https":
+            port = 443
+    if host_part.count(":") == 1:
+        host_part, _, port_part = host_part.partition(":")
+        port = int(port_part)
+    return host_part, port
+
+
+def _chunk(items: list[Any], size: int) -> Iterator[list[Any]]:
+    """Yield consecutive chunks of at most ``size`` items."""
+    for index in range(0, len(items), size):
+        yield items[index : index + size]
