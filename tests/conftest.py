@@ -44,6 +44,11 @@ class FakeSession:
 
         self.requests.append(url)
         cmnd = parse_qs(urlparse(url).query).get("cmnd", [""])[0]
+        if callable(self.responses):
+            reply = self.responses(cmnd)
+            if isinstance(reply, Exception):
+                raise reply
+            return FakeResponse(reply)
         if cmnd in self.responses:
             return FakeResponse(self.responses[cmnd])
         if isinstance(self.responses, CatchAll):
@@ -74,7 +79,7 @@ def status0():
             "SaveData": 1,
             "SetOption114": 0,
         },
-        "StatusPRM": {"Baudrate": 115200, "RestartReason": "Power On"},
+        "StatusPRM": {"Baudrate": 115200, "RestartReason": "Power On", "BootCount": 5},
         "StatusFWR": {"Version": "14.0.0"},
         "StatusNET": {"Hostname": "tasmota-abc"},
     }

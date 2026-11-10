@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import pytest
-from pyinfra.api.exceptions import ConnectError, InventoryError
+import requests
+from pyinfra.api.exceptions import ConnectError, InventoryError, PyinfraError
 
 from pyinfra_tasmota.connector import (
     BACKLOG_MAX_COMMANDS,
     TasmotaConnector,
     _chunk,
+    _extract_bootcount,
     _split_host_port,
 )
 from tests.conftest import CatchAll, FakeResponse
@@ -177,19 +179,97 @@ class TestApply:
         connector.apply()
         assert len(_backlog_requests(connector.session)) == 2
 
-    def test_reboot_commands_are_isolated(self, make_connector, status0):
-        connector = make_connector({"Status 0": status0, "Status 13": []})
+    def test_reboot_commands_are_sent_last_and_unwrapped(
+        self, make_connector, status0, monkeypatch
+    ):
+        monkeypatch.setattr("pyinfra_tasmota.connector.time.sleep", lambda _seconds: None)
+        pings = []
+
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 13":
+                return {}
+            if cmnd == "Status 1":
+                pings.append(cmnd)
+                if len(pings) == 1:
+                    return requests.ConnectionError("rebooting")
+                return {"StatusPRM": {"BootCount": 6}}
+            return {}
+
+        connector = make_connector(handler)
         connector.connect()
         connector.record("SetOption114", 1)
         connector.record("Restart", 1)
-        connector.session.responses = CatchAll()
-        with pytest.raises(NotImplementedError):
+        connector.apply()
+
+        requests_seen = connector.session.requests
+        reboot_at = next(i for i, u in enumerate(requests_seen) if "cmnd=Restart+1" in u)
+        assert any("Backlog0" in u for u in requests_seen[:reboot_at])
+        assert all("Restart" not in u for u in requests_seen if "Backlog0" in u)
+        assert len(pings) >= 2
+        assert connector.current("BootCount") == "5"  # re-ingest used the canned Status 0
+
+    def test_fast_reboot_detected_by_bootcount(self, make_connector, status0, monkeypatch):
+        monkeypatch.setattr("pyinfra_tasmota.connector.time.sleep", lambda _seconds: None)
+        state = {"first": True}
+
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 13":
+                return {}
+            if cmnd == "Status 1" and state["first"]:
+                state["first"] = False
+                return {"StatusPRM": {"BootCount": 5}}
+            if cmnd == "Status 1":
+                return {"StatusPRM": {"BootCount": 6}}
+            return {}
+
+        connector = make_connector(handler)
+        connector.connect()
+        connector.record("Restart", 1)
+        connector.apply()
+        assert state["first"] is False
+
+    def test_reboot_timeout_raises(self, make_connector, status0, monkeypatch):
+        clock = {"t": 0.0}
+        monkeypatch.setattr(
+            "pyinfra_tasmota.connector.time.sleep",
+            lambda seconds: clock.__setitem__("t", clock["t"] + seconds),
+        )
+        monkeypatch.setattr("pyinfra_tasmota.connector.time.monotonic", lambda: clock["t"])
+
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 13":
+                return {}
+            return {"StatusPRM": {"BootCount": 5}}
+
+        connector = make_connector(handler)
+        connector.connect()
+        connector.record("Restart", 1)
+        with pytest.raises(PyinfraError):
             connector.apply()
-        assert len(_backlog_requests(connector.session)) == 2
 
 
 def _backlog_requests(session):
     return [url for url in session.requests if "Backlog0" in url]
+
+
+class TestExtractBootcount:
+    def test_valid(self):
+        assert _extract_bootcount({"StatusPRM": {"BootCount": 7}}) == 7
+
+    def test_missing(self):
+        assert _extract_bootcount({"StatusFWR": {}}) is None
+
+    def test_not_a_dict(self):
+        assert _extract_bootcount("nope") is None
+
+    def test_statusprm_not_a_dict(self):
+        assert _extract_bootcount({"StatusPRM": "nope"}) is None
 
 
 class TestDisconnect:
@@ -198,6 +278,27 @@ class TestDisconnect:
         connector.connect()
         connector.record("SetOption114", 1)
         connector.session.responses["Backlog0 SaveData 0;SetOption114 1;SaveData 1"] = {}
+        connector.disconnect()
+        assert connector.session.closed is True
+
+    def test_disconnect_logs_flush_error(self, make_connector, status0, monkeypatch):
+        clock = {"t": 0.0}
+        monkeypatch.setattr(
+            "pyinfra_tasmota.connector.time.sleep",
+            lambda seconds: clock.__setitem__("t", clock["t"] + seconds),
+        )
+        monkeypatch.setattr("pyinfra_tasmota.connector.time.monotonic", lambda: clock["t"])
+
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 13":
+                return {}
+            return {"StatusPRM": {"BootCount": 5}}
+
+        connector = make_connector(handler)
+        connector.connect()
+        connector.record("Restart", 1)
         connector.disconnect()
         assert connector.session.closed is True
 

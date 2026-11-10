@@ -14,13 +14,14 @@ during connect.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 import requests
 from pyinfra import logger
-from pyinfra.api.exceptions import ConnectError, InventoryError
+from pyinfra.api.exceptions import ConnectError, InventoryError, PyinfraError
 from pyinfra.connectors.base import BaseConnector, ConnectorData, DataMeta
 from pyinfra.connectors.util import CommandOutput
 from typing_extensions import Unpack
@@ -35,6 +36,10 @@ log = logger.getChild("pyinfra-tasmota")
 # Tasmota's Backlog accepts at most this many commands. One slot is reserved
 # for the SaveData guard, so a batch carries at most this many real commands.
 BACKLOG_MAX_COMMANDS = 30
+
+# How long to wait for a rebooted device to answer again, and how often to poll.
+DEFAULT_REBOOT_TIMEOUT = 60.0
+REBOOT_POLL_INTERVAL = 0.5
 
 # A handful of Tasmota commands restart the device (or its networking stack).
 # The connector cannot apply further commands until the device is back, so
@@ -68,10 +73,15 @@ class TasmotaConnectorData(ConnectorData):
     """Connector data accepted per host in the inventory."""
 
     tasmota_friendly_name: str
+    tasmota_reboot_timeout: float
 
 
 data_meta: dict[str, DataMeta] = {
     "tasmota_friendly_name": DataMeta("Optional human-readable device name, for logging only"),
+    "tasmota_reboot_timeout": DataMeta(
+        "Seconds to wait for a rebooted device to answer again",
+        DEFAULT_REBOOT_TIMEOUT,
+    ),
 }
 
 
@@ -87,8 +97,7 @@ class TasmotaConnector(BaseConnector):
         super().__init__(state, host)
         self.session = requests.Session()
         self._cache: dict[str, Any] = {}
-        self._pending: list[tuple[str, str]] = []
-        self._flushed = False
+        self._pending: dict[str, str] = {}
 
     @staticmethod
     def make_names_data(name: str | None = None) -> Any:
@@ -124,6 +133,15 @@ class TasmotaConnector(BaseConnector):
             ConnectError: If the device cannot be reached or answers with an
                 unexpected payload.
         """
+        self._ingest()
+
+    def _ingest(self) -> None:
+        """Pull the full status dump and rebuild the settings cache.
+
+        Raises:
+            ConnectError: If the device cannot be reached or answers with an
+                unexpected payload.
+        """
         status = self._request("Status 0")
         if not isinstance(status, dict) or "Status" not in status:
             raise ConnectError(f"Unexpected status response from {self.host.name!r}")
@@ -144,9 +162,15 @@ class TasmotaConnector(BaseConnector):
         log.debug("%s: cached %d settings", self.host.name, len(self._cache))
 
     def disconnect(self) -> None:
-        """Flush any pending commands and close the HTTP session."""
+        """Flush any pending commands and close the HTTP session.
+
+        This is a safety net behind the ``apply`` operation. A disconnect must
+        not fail, so a flush error is logged rather than raised.
+        """
         try:
             self.apply()
+        except PyinfraError as err:
+            log.error("%s: flush during disconnect failed: %s", self.host.name, err)
         finally:
             self.session.close()
 
@@ -180,7 +204,11 @@ class TasmotaConnector(BaseConnector):
 
     def record(self, subject: str, value: Any) -> None:
         """Record a command to be sent during the next flush."""
-        self._pending.append((str(subject), str(value)))
+        self._pending[str(subject)] = str(value)
+
+    def has_pending(self) -> bool:
+        """Return whether any command is waiting to be flushed."""
+        return bool(self._pending)
 
     def current(self, subject: str) -> str | None:
         """Return the cached value of ``subject`` or ``None`` if unknown.
@@ -204,34 +232,71 @@ class TasmotaConnector(BaseConnector):
 
     def apply(self) -> None:
         """Send all pending commands to the device, in safe batches."""
-        if self._flushed or not self._pending:
-            self._flushed = True
+        if not self._pending:
             return
 
-        pending = list(self._pending)
+        pending = dict(self._pending)
         self._pending.clear()
 
-        immediate = [c for c in pending if c[0].lower() not in REBOOT_COMMANDS]
-        reboots = [c for c in pending if c[0].lower() in REBOOT_COMMANDS]
+        immediate = [(s, v) for s, v in pending.items() if s.lower() not in REBOOT_COMMANDS]
+        reboots = [(s, v) for s, v in pending.items() if s.lower() in REBOOT_COMMANDS]
 
         for batch in _chunk(immediate, BACKLOG_MAX_COMMANDS - 1):
-            self._send_backlog(batch)
+            self._send_batch(batch)
 
-        for command in reboots:
-            self._send_backlog([command], reboot=True)
+        for subject, value in reboots:
+            self._send_reboot(subject, value)
 
-        self._flushed = True
-
-    def _send_backlog(self, batch: list[tuple[str, str]], reboot: bool = False) -> None:
+    def _send_batch(self, batch: list[tuple[str, str]]) -> None:
+        """Send a batch of non-rebooting commands, guarding against flash wear."""
         parts = ["SaveData 0", *(f"{subject} {value}" for subject, value in batch), "SaveData 1"]
         self._request("Backlog0 " + ";".join(parts))
-        if reboot:
-            self._await_reboot()
         for subject, value in batch:
             self._cache[subject] = value
 
+    def _send_reboot(self, subject: str, value: str) -> None:
+        """Send a single reboot-triggering command and wait for the device.
+
+        A reboot drains or aborts the backlog, so the command must stand alone.
+        It is not wrapped in a ``SaveData`` guard: the reboot persists the
+        configuration itself, and a trailing ``SaveData 1`` could be lost.
+        """
+        self._request(f"{subject} {value}")
+        self._await_reboot()
+
     def _await_reboot(self) -> None:
-        raise NotImplementedError("Reboot awaiting is not implemented yet")
+        """Wait for a rebooted device to answer, then refresh the cache.
+
+        The device is considered back once it either was seen to drop and is
+        answering again, or its ``BootCount`` has advanced. The latter covers
+        fast reboots during which the HTTP server never appears to go down.
+
+        Raises:
+            PyinfraError: If the device does not return within the configured
+                timeout.
+        """
+        previous_boot = self._cache.get("BootCount")
+        timeout = float(self.data.get("tasmota_reboot_timeout", DEFAULT_REBOOT_TIMEOUT))
+        deadline = time.monotonic() + timeout
+        saw_down = False
+
+        while time.monotonic() < deadline:
+            reply = self._request("Status 1", allow_missing=True)
+            if reply is None:
+                saw_down = True
+            else:
+                boot = _extract_bootcount(reply)
+                if saw_down or (
+                    previous_boot is not None and boot is not None and boot != previous_boot
+                ):
+                    log.info("%s: device is back after reboot", self.host.name)
+                    self._ingest()
+                    return
+            time.sleep(REBOOT_POLL_INTERVAL)
+
+        raise PyinfraError(
+            f"{self.host.name}: device did not return within {timeout:g}s after reboot"
+        )
 
     def _repair_savedata(self) -> None:
         if self._cache.get("SaveData") == 0:
@@ -289,6 +354,15 @@ def _split_host_port(name: str) -> tuple[str, int]:
         host_part, _, port_part = host_part.partition(":")
         port = int(port_part)
     return host_part, port
+
+
+def _extract_bootcount(reply: Any) -> Any:
+    """Return ``BootCount`` from a ``Status 1`` reply, or ``None``."""
+    if isinstance(reply, dict):
+        prm = reply.get("StatusPRM")
+        if isinstance(prm, dict):
+            return prm.get("BootCount")
+    return None
 
 
 def _chunk(items: list[Any], size: int) -> Iterator[list[Any]]:
