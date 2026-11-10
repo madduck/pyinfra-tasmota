@@ -13,7 +13,14 @@ from pyinfra.api.operation import operation
 from pyinfra.context import host
 
 from .compare import adapter_for, is_rule
-from .connector import NO_READ_COMMANDS, TasmotaConnector, _canonical, is_secret, redact
+from .connector import (
+    NO_READ_COMMANDS,
+    TasmotaConnector,
+    _canonical,
+    _normalize,
+    is_secret,
+    redact,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Mapping
@@ -110,6 +117,9 @@ def ensure_host_data(
     rule text, or a mapping of its arguments. Their text is sent directly,
     because it can contain semicolons.
 
+    ``Template`` and the ``Module 0`` that selects it are left to the
+    ``template`` operation, so they are not sent as ordinary commands.
+
     Args:
         key: The host-data key holding a mapping of command to value.
         send_passwords: When False, password commands are left out.
@@ -127,6 +137,8 @@ def ensure_host_data(
     rule_sends: list[tuple[str, str]] = []
     changed = False
     for subject, value in commands.items():
+        if _is_template_activation(subject, value):
+            continue
         if is_rule(subject):
             index = _rule_index(subject)
             send_code, rule_changed = _ensure_rule_value(connector, index, value)
@@ -277,6 +289,17 @@ def _ensure_rule(
     if stop_on_error is not None:
         changed = _ensure(connector, subject, "9" if stop_on_error else "8") or changed
     return send_code, changed
+
+
+def _is_template_activation(subject: str, value: Any) -> bool:
+    """Return whether a command is owned by the ``template`` operation.
+
+    ``Template`` stores a template and ``Module 0`` selects it, so the
+    ``template`` operation handles both. ``ensure_host_data`` leaves them out
+    rather than sending them as ordinary commands.
+    """
+    canonical = _canonical(subject)
+    return canonical == "template" or (canonical == "module" and _normalize(value) == "0")
 
 
 def _rule_index(subject: str) -> int:

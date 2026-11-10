@@ -38,6 +38,19 @@ class TestEnsureHostData:
         assert len(list(ensure_host_data._inner())) == 1
         assert list(connector._pending) == [("setoption114", "1")]
 
+    @pytest.mark.parametrize("module", [0, "0", "OFF"])
+    def test_leaves_template_and_module_selection_to_the_template_operation(
+        self, use_connector, status0, module
+    ):
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": []},
+            data={
+                "tasmota": {"Template": {"NAME": "x"}, "Module": module, "SetOption114": 1},
+            },
+        )
+        assert len(list(ensure_host_data._inner())) == 1
+        assert list(connector._pending) == [("setoption114", "1")]
+
     def test_no_data_yields_nothing(self, use_connector, status0):
         use_connector({"Status 0": status0, "Status 13": []})
         assert list(ensure_host_data._inner()) == []
