@@ -62,6 +62,10 @@ through an adapter:
 - `TimeSTD` and `TimeDST` take a comma-separated list but answer with a
   struct, which is flattened for the comparison.
 - `Pulsetime<x>` compares only its `Set` field.
+- `AdcParam<x>` compares comma-separated parameters with the device's list.
+  An extra trailing zero in the response is ignored. For example,
+  `36,10000,10000,3350` matches `[36,10000,10000,3350,0]`. Nonzero extra
+  parameters and changes to explicit parameters still produce a change.
 - `Latitude` and `Longitude` are compared with a small tolerance, because the
   device stores them as micro-degrees using 32-bit float, which loses the last
   digit.

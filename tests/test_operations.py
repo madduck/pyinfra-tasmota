@@ -391,6 +391,30 @@ class TestCmnd:
 
 
 class TestAdapters:
+    def test_adcparam_list_matches_without_trailing_zero(self, use_connector, status0):
+        connector = use_connector(
+            {
+                "Status 0": status0,
+                "Status 13": [],
+                "AdcParam1": {"AdcParam1": [36, 10000, 10000, 3350, 0]},
+            }
+        )
+        assert list(cmnd._inner(AdcParam1="36,10000,10000,3350")) == []
+        assert not connector.has_pending()
+        assert list(apply._inner()) == []
+
+    def test_adcparam_changed_parameter_is_queued(self, use_connector, status0):
+        connector = use_connector(
+            {
+                "Status 0": status0,
+                "Status 13": [],
+                "AdcParam1": {"AdcParam1": [36, 10000, 10000, 3350, 0]},
+            }
+        )
+        assert len(list(cmnd._inner(AdcParam1="36,10000,10000,3351"))) == 1
+        assert connector.has_pending()
+        assert list(connector._pending) == [("adcparam1", "36,10000,10000,3351")]
+
     def test_time_struct_matches(self, use_connector, status0):
         use_connector(
             {

@@ -86,6 +86,21 @@ class _Struct(Adapter):
         return _normalize(observed) == _normalize(wanted)
 
 
+class _AdcParam(Adapter):
+    """Compare comma-separated ADC parameters with a response list.
+
+    The device can include a trailing zero that the desired value omits.
+    Only that extra zero is ignored, not a nonzero parameter.
+    """
+
+    def matches(self, desired: Any, observed: Any) -> bool:
+        if not isinstance(observed, list):
+            return super().matches(desired, observed)
+        wanted = [_normalize(part) for part in str(desired).split(",")]
+        actual = [_normalize(part) for part in observed]
+        return actual in (wanted, [*wanted, "0"])
+
+
 class _Field(Adapter):
     """Compare only one field of a nested response struct."""
 
@@ -271,12 +286,16 @@ _SHUTTER_DURATION_PATTERN = re.compile(r"shutter(?:open|close)duration\d*$")
 _SHUTTER_BUTTON = _Prefix()
 _SHUTTER_BUTTON_PATTERN = re.compile(r"shutterbutton\d*$")
 
+_ADC_PARAM = _AdcParam()
+_ADC_PARAM_PATTERN = re.compile(r"adcparam\d+$")
+
 _PULSETIME_PATTERN = re.compile(r"pulsetime\d*$")
 _RULE_PATTERN = re.compile(r"rule\d+$")
 
 
 # Indexed commands, matched by pattern rather than exact name.
 _PATTERNS = (
+    (_ADC_PARAM_PATTERN, _ADC_PARAM),
     (_PULSETIME_PATTERN, _PULSETIME),
     (_SHUTTER_DURATION_PATTERN, _SHUTTER_DURATION),
     (_SHUTTER_BUTTON_PATTERN, _SHUTTER_BUTTON),

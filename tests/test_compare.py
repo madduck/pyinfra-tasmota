@@ -44,6 +44,48 @@ class TestStructAdapter:
         assert adapter_for("TimeDST").matches("1,2,3,4,5,6", "1,2,3,4,5,6")
 
 
+class TestAdcParamAdapter:
+    def test_matches_list_with_omitted_zero(self):
+        assert adapter_for("AdcParam1").matches("36,10000,10000,3350", [36, 10000, 10000, 3350, 0])
+
+    def test_matches_complete_list(self):
+        assert adapter_for("AdcParam1").matches(
+            "36,10000,10000,3350,1", [36, 10000, 10000, 3350, 1]
+        )
+
+    def test_matches_without_extra_field(self):
+        assert adapter_for("AdcParam1").matches("36,10000,10000,3350", [36, 10000, 10000, 3350])
+
+    def test_ignores_spacing(self):
+        assert adapter_for("AdcParam2").matches(
+            " 36, 10000, 10000, 3350 ", [36, 10000, 10000, 3350, 0]
+        )
+
+    def test_changed_parameter_differs(self):
+        assert not adapter_for("AdcParam1").matches(
+            "36,10000,10000,3351", [36, 10000, 10000, 3350, 0]
+        )
+
+    def test_nonzero_extra_field_differs(self):
+        assert not adapter_for("AdcParam1").matches(
+            "36,10000,10000,3350", [36, 10000, 10000, 3350, 1]
+        )
+
+    def test_explicit_last_parameter_differs(self):
+        assert not adapter_for("AdcParam1").matches(
+            "36,10000,10000,3350,1", [36, 10000, 10000, 3350, 0]
+        )
+
+    def test_scalar_fallback(self):
+        assert adapter_for("AdcParam1").matches("36,10000,10000,3350", "36,10000,10000,3350")
+        assert not adapter_for("AdcParam1").matches("36,10000,10000,3350", None)
+
+    def test_indexed_commands_match_canonically(self):
+        assert adapter_for("AdcParam1") is adapter_for("adcparam8")
+        assert adapter_for("AdcParam1").whole is False
+        assert adapter_for("AdcParam1") is not adapter_for("AdcParam1extra")
+
+
 class TestFieldAdapter:
     def test_pulsetime_compares_set(self):
         assert adapter_for("Pulsetime3").matches(10, {"Set": 10, "Remaining": 5})
