@@ -623,7 +623,22 @@ class TestVerbosityLogging:
         connector.state = make_state(2)
         with caplog.at_level(logging.INFO):
             list(cmnd._inner(Unknown="x"))
-        assert "tasmota.example.org: Unknown state unknown, will set to x" in caplog.messages
+        assert "tasmota.example.org: Unknown is unknown, will set to x" in caplog.messages
+
+    def test_level_two_names_rule_field(self, use_connector, status0, caplog):
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Rule1":
+                return {"Rule1": {"State": "ON", "Rules": "old"}}
+            return {}
+
+        connector = use_connector(handler)
+        connector.state = make_state(2)
+        with caplog.at_level(logging.INFO):
+            list(cmnd._inner(Rule1=["new", "1"]))
+        assert "tasmota.example.org: Rule1 State is already ON, skipping" in caplog.messages
+        assert "tasmota.example.org: Rule1 text is old, will set to new" in caplog.messages
 
     def test_not_executing_does_not_log_state(self, use_connector, status0, caplog):
         connector = use_connector({"Status 0": status0, "Status 13": []})

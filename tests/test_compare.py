@@ -183,6 +183,24 @@ class TestRuleAdapter:
     def test_uses_command_key(self):
         assert adapter_for("Rule1").whole is False
 
+    def test_describe_names_field(self):
+        adapter = adapter_for("Rule1")
+        assert adapter.describe("1") == "State"
+        assert adapter.describe("5") == "Once"
+        assert adapter.describe("9") == "StopOnError"
+        assert adapter.describe("ON x DO y ENDON") == "text"
+
+    def test_observed_narrows_to_field(self):
+        adapter = adapter_for("Rule1")
+        assert adapter.observed("1", RULE_OBSERVED) == "ON"
+        assert adapter.observed("ON x DO y ENDON", RULE_OBSERVED) == RULE_OBSERVED["Rules"]
+        assert adapter.observed("text", "text") == "text"
+
+    def test_default_adapter_ignores_field(self):
+        adapter = adapter_for("Power")
+        assert adapter.describe("ON") == ""
+        assert adapter.observed("ON", "OFF") == "OFF"
+
 
 class TestSkipAdapter:
     def test_passwords(self):

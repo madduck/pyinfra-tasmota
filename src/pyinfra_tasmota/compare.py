@@ -39,6 +39,24 @@ class Adapter:
         """Return whether ``observed`` already reaches ``desired``."""
         return _normalize(observed) == _normalize(desired)
 
+    def describe(self, desired: Any) -> str:
+        """Return a short label for the part of the value being compared.
+
+        Most commands compare the whole value, so the default is empty. The
+        rule adapter overrides this to name the field, which keeps its text
+        and flag comparisons distinguishable in the log.
+        """
+        return ""
+
+    def observed(self, desired: Any, observed: Any) -> Any:
+        """Return the part of ``observed`` that the comparison uses.
+
+        Most commands compare the whole value, so the default is the value
+        itself. The rule adapter narrows this to the field it compares, which
+        keeps the log readable.
+        """
+        return observed
+
 
 class _Skip(Adapter):
     """A command whose observed value is masked, so it cannot be diffed."""
@@ -204,6 +222,16 @@ class _Rule(Adapter):
             field, expected = flag
             return _normalize(observed.get(field)) == expected
         return _normalize(observed.get("Rules")) == wanted
+
+    def describe(self, desired: Any) -> str:
+        flag = _RULE_FLAGS.get(_normalize(desired))
+        return flag[0] if flag is not None else "text"
+
+    def observed(self, desired: Any, observed: Any) -> Any:
+        if not isinstance(observed, dict):
+            return observed
+        flag = _RULE_FLAGS.get(_normalize(desired))
+        return observed.get(flag[0] if flag is not None else "Rules")
 
 
 _DEFAULT = Adapter()

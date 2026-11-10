@@ -299,11 +299,13 @@ def _needs_change(connector: TasmotaConnector, subject: str, value: Any) -> bool
     """Return whether a command must be sent, reading the device if needed."""
     desired = str(value)
     adapter = adapter_for(subject)
+    described = adapter.describe(value)
+    label = f"{subject} {described}" if described else subject
 
     if adapter.skip:
         if connector.executing:
             connector.log_at(
-                2, "%s: %s is masked, setting unconditionally", connector.host.name, subject
+                2, "%s: %s is masked, setting unconditionally", connector.host.name, label
             )
         return True
 
@@ -320,8 +322,8 @@ def _needs_change(connector: TasmotaConnector, subject: str, value: Any) -> bool
                 2,
                 "%s: %s is already %s, skipping",
                 connector.host.name,
-                subject,
-                redact(subject, observed),
+                label,
+                redact(subject, adapter.observed(value, observed)),
             )
         return False
 
@@ -329,9 +331,9 @@ def _needs_change(connector: TasmotaConnector, subject: str, value: Any) -> bool
         if observed is None:
             connector.log_at(
                 2,
-                "%s: %s state unknown, will set to %s",
+                "%s: %s is unknown, will set to %s",
                 connector.host.name,
-                subject,
+                label,
                 redact(subject, desired),
             )
         else:
@@ -339,8 +341,8 @@ def _needs_change(connector: TasmotaConnector, subject: str, value: Any) -> bool
                 2,
                 "%s: %s is %s, will set to %s",
                 connector.host.name,
-                subject,
-                redact(subject, observed),
+                label,
+                redact(subject, adapter.observed(value, observed)),
                 redact(subject, desired),
             )
     return True
