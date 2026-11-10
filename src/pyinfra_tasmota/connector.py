@@ -266,8 +266,16 @@ class TasmotaConnector(BaseConnector):
 
         The lookup is canonical, so it ignores case and the ``SO`` alias.
         """
-        value = self._cache.get(_canonical(subject))
+        value = self.raw(subject)
         return None if value is None else str(value)
+
+    def raw(self, subject: str) -> Any:
+        """Return the raw cached value of ``subject``, or ``None``.
+
+        Struct responses are kept as dicts so comparison adapters can read
+        their fields.
+        """
+        return self._cache.get(_canonical(subject))
 
     def cache(self, subject: str, value: Any) -> None:
         """Store ``value`` for ``subject`` in the settings cache."""

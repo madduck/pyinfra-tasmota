@@ -10,7 +10,8 @@ from pyinfra.api.exceptions import PyinfraError
 from pyinfra.api.operation import operation
 from pyinfra.context import host
 
-from .connector import REBOOT_COMMANDS, TasmotaConnector, _canonical, _normalize
+from .compare import adapter_for
+from .connector import REBOOT_COMMANDS, TasmotaConnector, _canonical
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -53,50 +54,65 @@ def cmnd(**kwargs: Any) -> Generator[PyinfraCommand, None, None]:
     changed = False
     for subject, value in kwargs.items():
         if isinstance(value, (list, tuple)):
-            for one in value:
-                connector.record(subject, str(one))
-                if connector.executing:
-                    connector.log_at(2, "%s: %s queued %s", connector.host.name, subject, one)
-                changed = True
-            continue
-
-        desired = str(value)
-
-        current = connector.current(subject)
-        if current is None and _canonical(subject) not in REBOOT_COMMANDS:
-            current = _read_current(connector, subject)
-            connector.log_at(3, "%s: read %s as %s", connector.host.name, subject, current)
-
-        if current is not None and _normalize(current) == _normalize(desired):
-            if connector.executing:
-                connector.log_at(
-                    2, "%s: %s is already %s, skipping", connector.host.name, subject, current
-                )
-            continue
-
-        if connector.executing:
-            if current is None:
-                connector.log_at(
-                    2,
-                    "%s: %s state unknown, will set to %s",
-                    connector.host.name,
-                    subject,
-                    desired,
-                )
-            else:
-                connector.log_at(
-                    2,
-                    "%s: %s is %s, will set to %s",
-                    connector.host.name,
-                    subject,
-                    current,
-                    desired,
-                )
-        connector.record(subject, desired)
-        changed = True
+            changed = _queue_sequence(connector, subject, value) or changed
+        else:
+            changed = _ensure(connector, subject, str(value)) or changed
 
     if changed:
         yield _marker()
+
+
+def _queue_sequence(
+    connector: TasmotaConnector, subject: str, values: list[Any] | tuple[Any, ...]
+) -> bool:
+    """Queue a command once per value, in order, without diffing."""
+    for one in values:
+        connector.record(subject, str(one))
+        if connector.executing:
+            connector.log_at(2, "%s: %s queued %s", connector.host.name, subject, one)
+    return bool(values)
+
+
+def _ensure(connector: TasmotaConnector, subject: str, desired: str) -> bool:
+    """Ensure one command, returning whether a change was recorded."""
+    adapter = adapter_for(subject)
+
+    if adapter.skip:
+        connector.record(subject, desired)
+        if connector.executing:
+            connector.log_at(
+                2, "%s: %s is masked, setting unconditionally", connector.host.name, subject
+            )
+        return True
+
+    observed = connector.raw(subject)
+    if observed is None and _canonical(subject) not in REBOOT_COMMANDS:
+        observed = _read_current(connector, subject)
+        connector.log_at(3, "%s: read %s as %s", connector.host.name, subject, observed)
+
+    if observed is not None and adapter.observed(observed) == adapter.desired(desired):
+        if connector.executing:
+            connector.log_at(
+                2, "%s: %s is already %s, skipping", connector.host.name, subject, observed
+            )
+        return False
+
+    if connector.executing:
+        if observed is None:
+            connector.log_at(
+                2, "%s: %s state unknown, will set to %s", connector.host.name, subject, desired
+            )
+        else:
+            connector.log_at(
+                2,
+                "%s: %s is %s, will set to %s",
+                connector.host.name,
+                subject,
+                observed,
+                desired,
+            )
+    connector.record(subject, desired)
+    return True
 
 
 @operation()
@@ -124,36 +140,33 @@ def _connector() -> TasmotaConnector:
     return connector
 
 
-def _read_current(connector: TasmotaConnector, subject: str) -> str | None:
+def _read_current(connector: TasmotaConnector, subject: str) -> Any:
     """Read and cache the current value of ``subject`` from the device.
 
     Tasmota answers a bare command with a single ``{key: value}`` object. The
     key usually matches the command, but not always: ``so114`` answers with
-    ``SetOption114``. An exact canonical match wins; otherwise a lone scalar
-    value is accepted, which resolves aliases.
+    ``SetOption114``. An exact canonical match wins; otherwise a lone value is
+    accepted, which resolves aliases. The raw value is returned, so struct
+    responses reach the comparison adapter intact.
     """
     response = connector.request(subject, allow_missing=True)
     if not isinstance(response, dict):
         return None
 
-    scalars = {
-        key: value
-        for key, value in response.items()
-        if not isinstance(value, (dict, list)) and key.lower() != "command"
-    }
-    if not scalars:
+    candidates = {key: value for key, value in response.items() if key.lower() != "command"}
+    if not candidates:
         return None
 
     target = _canonical(subject)
-    for key, value in scalars.items():
+    for key, value in candidates.items():
         if _canonical(key) == target:
             connector.cache(key, value)
-            return str(value)
+            return value
 
-    if len(scalars) == 1:
-        key, value = next(iter(scalars.items()))
+    if len(candidates) == 1:
+        key, value = next(iter(candidates.items()))
         connector.cache(key, value)
-        return str(value)
+        return value
 
     return None
 

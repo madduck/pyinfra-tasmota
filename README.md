@@ -52,6 +52,22 @@ Non-rebooting commands are flushed as `Backlog0` batches, split to stay
 within Tasmota's limit of 30 commands and decode-config's limit of 320
 characters per command line. Reboot-triggering commands are sent on their own.
 
+## Comparison
+
+`cmnd` compares the desired value with the device response. A few commands
+answer with something other than the desired value, so they are compared
+through an adapter:
+
+- `TimeSTD` and `TimeDST` take a comma-separated list but answer with a
+  struct, which is flattened for the comparison.
+- `Pulsetime<x>` compares only its `Set` field.
+- `Latitude` and `Longitude` are compared truncated to 6 decimal places, as
+  the device stores them.
+- `Password1`, `Password2`, and `MqttPassword` answer with `***`, so their
+  diff is skipped and they are always sent.
+- `FullTopic 1` selects the firmware default, `%prefix%/%topic%/`, which is
+  what the desired value is expanded to before comparison.
+
 ## Deploy
 
 The package ships a deploy that ensures everything under the `tasmota`

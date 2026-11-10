@@ -199,6 +199,76 @@ class TestCmnd:
         assert len(connector.session.requests) == before
 
 
+class TestAdapters:
+    def test_time_struct_matches(self, use_connector, status0):
+        use_connector(
+            {
+                "Status 0": status0,
+                "Status 13": [],
+                "TimeDST": {
+                    "TimeDst": {
+                        "Hemisphere": 0,
+                        "Week": 0,
+                        "Month": 3,
+                        "Day": 1,
+                        "Hour": 1,
+                        "Offset": 120,
+                    }
+                },
+            }
+        )
+        assert list(cmnd._inner(TimeDST="0,0,3,1,1,120")) == []
+
+    def test_time_struct_differs(self, use_connector, status0):
+        connector = use_connector(
+            {
+                "Status 0": status0,
+                "Status 13": [],
+                "TimeDST": {
+                    "TimeDst": {
+                        "Hemisphere": 0,
+                        "Week": 0,
+                        "Month": 3,
+                        "Day": 1,
+                        "Hour": 1,
+                        "Offset": 60,
+                    }
+                },
+            }
+        )
+        assert len(list(cmnd._inner(TimeDST="0,0,3,1,1,120"))) == 1
+        assert list(connector._pending) == [("timedst", "0,0,3,1,1,120")]
+
+    def test_pulsetime_compares_set_field(self, use_connector, status0):
+        use_connector(
+            {
+                "Status 0": status0,
+                "Status 13": [],
+                "Pulsetime3": {"Pulsetime3": {"Set": 10, "Remaining": 4}},
+            }
+        )
+        assert list(cmnd._inner(Pulsetime3=10)) == []
+
+    def test_latitude_truncates(self, use_connector, status0):
+        use_connector({"Status 0": status0, "Status 13": [], "Latitude": {"Latitude": 51.507350}})
+        assert list(cmnd._inner(Latitude="51.5073509")) == []
+
+    def test_fulltopic_default_matches(self, use_connector, status0):
+        use_connector(
+            {
+                "Status 0": status0,
+                "Status 13": [],
+                "FullTopic": {"FullTopic": "%prefix%/%topic%/"},
+            }
+        )
+        assert list(cmnd._inner(FullTopic=1)) == []
+
+    def test_masked_command_is_always_sent(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        assert len(list(cmnd._inner(Password1="secret"))) == 1
+        assert list(connector._pending) == [("password1", "secret")]
+
+
 class TestApply:
     def test_no_pending_yields_nothing(self, use_connector, status0):
         use_connector({"Status 0": status0, "Status 13": []})
@@ -249,6 +319,15 @@ class TestVerbosityLogging:
             list(cmnd._inner(SetOption120=1))
         assert "tasmota.example.org: read SetOption120 as 0" in caplog.messages
         assert "tasmota.example.org: SetOption120 is 0, will set to 1" in caplog.messages
+
+    def test_level_two_logs_masked(self, use_connector, status0, caplog):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        connector.state = make_state(2)
+        with caplog.at_level(logging.INFO):
+            list(cmnd._inner(Password1="secret"))
+        assert (
+            "tasmota.example.org: Password1 is masked, setting unconditionally" in caplog.messages
+        )
 
     def test_level_two_logs_queued_sequence(self, use_connector, status0, caplog):
         connector = use_connector({"Status 0": status0, "Status 13": []})
