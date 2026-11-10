@@ -1,6 +1,6 @@
 [project]
 name = "pyinfra-tasmota"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A Pyinfra connector to manage Tasmota devices via their HTTP API"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,8 +22,11 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "uv-dynamic-versioning"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pyinfra_tasmota"]

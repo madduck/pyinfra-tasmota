@@ -64,6 +64,12 @@ The connector follows pyinfra's `-v` flags:
 - `-vvv` also reports internal detail, such as the size of the status cache
   and how commands are grouped into `Backlog0` batches.
 
+## Versioning
+
+The package version comes from Git via `uv-dynamic-versioning`. Tag a release
+as `vX.Y.Z`; commits after a tag get a `.postN.dev0+<hash>` suffix. A checkout
+with no tags reports `0.0.0`.
+
 ## Connector data
 
 Set these on a host in the inventory:
