@@ -7,24 +7,68 @@ import logging
 import pytest
 
 from pyinfra_tasmota import operations
-from pyinfra_tasmota.operations import apply, cmnd
+from pyinfra_tasmota.operations import apply, cmnd, ensure_host_data
 from tests.conftest import CatchAll, make_state
 
 
 class FakeHost:
-    def __init__(self, connector):
+    def __init__(self, connector, data=None):
         self.connector = connector
+        self.data = {} if data is None else data
 
 
 @pytest.fixture
 def use_connector(monkeypatch, make_connector):
-    def factory(responses, **host_data):
+    def factory(responses, data=None, **host_data):
         connector = make_connector(responses, **host_data)
         connector.connect()
-        monkeypatch.setattr(operations, "host", FakeHost(connector))
+        monkeypatch.setattr(operations, "host", FakeHost(connector, data))
         return connector
 
     return factory
+
+
+class TestEnsureHostData:
+    def test_ensures_declared_commands(self, use_connector, status0):
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": []},
+            data={"tasmota": {"SetOption114": 1, "Module": 1}},
+        )
+        assert len(list(ensure_host_data._inner())) == 1
+        assert list(connector._pending) == [("setoption114", "1")]
+
+    def test_no_data_yields_nothing(self, use_connector, status0):
+        use_connector({"Status 0": status0, "Status 13": []})
+        assert list(ensure_host_data._inner()) == []
+
+    def test_custom_key(self, use_connector, status0):
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": []},
+            data={"other": {"SetOption114": 1}},
+        )
+        assert len(list(ensure_host_data._inner(key="other"))) == 1
+        assert list(connector._pending) == [("setoption114", "1")]
+
+    def test_keeps_passwords_by_default(self, use_connector, status0):
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": []},
+            data={"tasmota": {"Password1": "secret"}},
+        )
+        assert len(list(ensure_host_data._inner())) == 1
+        assert list(connector._pending) == [("password1", "secret")]
+
+    def test_drops_passwords_when_disabled(self, use_connector, status0):
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": []},
+            data={"tasmota": {"SetOption114": 1, "Password1": "secret", "MqttPassword": "x"}},
+        )
+        assert len(list(ensure_host_data._inner(send_passwords=False))) == 1
+        assert list(connector._pending) == [("setoption114", "1")]
+
+    def test_rejects_non_mapping(self, use_connector, status0):
+        use_connector({"Status 0": status0, "Status 13": []}, data={"tasmota": [1, 2]})
+        with pytest.raises(TypeError):
+            list(ensure_host_data._inner())
 
 
 class TestCmnd:

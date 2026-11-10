@@ -2,45 +2,34 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
-
-import pytest
 
 from pyinfra_tasmota import deploy as deploy_module
 
 
 class TestTasmotaDeploy:
-    def _patch(self, monkeypatch: Any, data: dict[str, Any]) -> list[tuple[str, Any]]:
+    def _patch(self, monkeypatch: Any) -> list[tuple[str, Any]]:
         calls: list[tuple[str, Any]] = []
-        monkeypatch.setattr(deploy_module, "host", SimpleNamespace(data=data))
-        monkeypatch.setattr(deploy_module, "cmnd", lambda **kwargs: calls.append(("cmnd", kwargs)))
+        monkeypatch.setattr(
+            deploy_module,
+            "ensure_host_data",
+            lambda **kwargs: calls.append(("ensure_host_data", kwargs)),
+        )
         monkeypatch.setattr(deploy_module, "apply", lambda: calls.append(("apply", None)))
         return calls
 
-    def test_ensures_declared_commands(self, monkeypatch):
-        calls = self._patch(monkeypatch, {"tasmota": {"SetOption114": 1}})
+    def test_ensures_host_data_then_applies(self, monkeypatch):
+        calls = self._patch(monkeypatch)
         deploy_module.tasmota._inner()
-        assert calls == [("cmnd", {"SetOption114": 1}), ("apply", None)]
+        assert calls == [
+            ("ensure_host_data", {"send_passwords": True}),
+            ("apply", None),
+        ]
 
-    def test_missing_key_is_empty(self, monkeypatch):
-        calls = self._patch(monkeypatch, {})
-        deploy_module.tasmota._inner()
-        assert calls == [("cmnd", {}), ("apply", None)]
-
-    def test_rejects_non_mapping(self, monkeypatch):
-        self._patch(monkeypatch, {"tasmota": [1, 2]})
-        with pytest.raises(TypeError):
-            deploy_module.tasmota._inner()
-
-    def test_send_passwords_defaults_true(self, monkeypatch):
-        commands = {"Password1": "a", "Password2": "b", "MqttPassword": "c", "Module": 1}
-        calls = self._patch(monkeypatch, {"tasmota": commands})
-        deploy_module.tasmota._inner()
-        assert calls == [("cmnd", commands), ("apply", None)]
-
-    def test_send_passwords_false_drops_passwords(self, monkeypatch):
-        commands = {"Password1": "a", "Password2": "b", "MqttPassword": "c", "Module": 1}
-        calls = self._patch(monkeypatch, {"tasmota": commands})
+    def test_send_passwords_is_forwarded(self, monkeypatch):
+        calls = self._patch(monkeypatch)
         deploy_module.tasmota._inner(send_passwords=False)
-        assert calls == [("cmnd", {"Module": 1}), ("apply", None)]
+        assert calls == [
+            ("ensure_host_data", {"send_passwords": False}),
+            ("apply", None),
+        ]

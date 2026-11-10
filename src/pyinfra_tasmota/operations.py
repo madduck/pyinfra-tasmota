@@ -11,10 +11,10 @@ from pyinfra.api.operation import operation
 from pyinfra.context import host
 
 from .compare import adapter_for
-from .connector import NO_READ_COMMANDS, TasmotaConnector, _canonical, redact
+from .connector import NO_READ_COMMANDS, TasmotaConnector, _canonical, is_secret, redact
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Mapping
 
     from pyinfra.api.command import PyinfraCommand
 
@@ -51,16 +51,46 @@ def cmnd(**kwargs: Any) -> Generator[PyinfraCommand, None, None]:
     Yields:
         At most one marker command when any value must change.
     """
-    connector = _connector()
+    if _ensure_all(_connector(), kwargs):
+        yield _marker()
+
+
+@operation()
+def ensure_host_data(
+    key: str = "tasmota", send_passwords: bool = True
+) -> Generator[PyinfraCommand, None, None]:
+    """Ensure the commands declared under a host-data key.
+
+    The commands are read here, rather than passed as arguments, so the
+    operation is identical on every host. pyinfra runs one operation for every
+    host that registered it, so passing host-specific arguments would create
+    one operation per host and print "Skipped" for all the others.
+
+    Args:
+        key: The host-data key holding a mapping of command to value.
+        send_passwords: When False, password commands are left out.
+
+    Yields:
+        At most one marker command when any value must change.
+    """
+    commands = host.data.get(key, {})
+    if not isinstance(commands, dict):
+        raise TypeError(f"host data {key!r} must be a mapping of command to value")
+    if not send_passwords:
+        commands = {name: value for name, value in commands.items() if not is_secret(name)}
+    if _ensure_all(_connector(), commands):
+        yield _marker()
+
+
+def _ensure_all(connector: TasmotaConnector, commands: Mapping[str, Any]) -> bool:
+    """Ensure a mapping of commands, returning whether any change was recorded."""
     changed = False
-    for subject, value in kwargs.items():
+    for subject, value in commands.items():
         if isinstance(value, (list, tuple)):
             changed = _queue_sequence(connector, subject, value) or changed
         else:
             changed = _ensure(connector, subject, value) or changed
-
-    if changed:
-        yield _marker()
+    return changed
 
 
 def _queue_sequence(
