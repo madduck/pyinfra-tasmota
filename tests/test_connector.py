@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import parse_qs, urlparse
+
 import pytest
 import requests
 from pyinfra.api.exceptions import ConnectError, InventoryError, PyinfraError
@@ -154,10 +156,7 @@ class TestApply:
         connector.record("SetOption114", 1)
         connector.session.responses["Backlog0 SaveData 0;SetOption114 1;SaveData 1"] = {}
         connector.apply()
-        assert (
-            "Backlog0 SaveData 0;SetOption114 1;SaveData 1" in connector.session.requests[-1]
-            or "Backlog0+SaveData+0" in connector.session.requests[-1]
-        )
+        assert _last_cmnd(connector.session) == "Backlog0 SaveData 0;SetOption114 1;SaveData 1"
         assert connector.current("SetOption114") == "1"
 
     def test_apply_is_idempotent(self, make_connector, status0):
@@ -170,14 +169,17 @@ class TestApply:
         connector.apply()
         assert len(connector.session.requests) == count
 
-    def test_chunks_large_batches(self, make_connector, status0):
+    def test_batch_respects_backlog_limit(self, make_connector, status0):
         connector = make_connector({"Status 0": status0, "Status 13": []})
         connector.connect()
         for index in range(BACKLOG_MAX_COMMANDS):
             connector.record(f"SetOption{index}", 1)
         connector.session.responses = CatchAll()
         connector.apply()
-        assert len(_backlog_requests(connector.session)) == 2
+        batches = _backlog_payloads(connector.session)
+        assert len(batches) == 2
+        for commands in batches:
+            assert len(commands) <= BACKLOG_MAX_COMMANDS
 
     def test_reboot_commands_are_sent_last_and_unwrapped(
         self, make_connector, status0, monkeypatch
@@ -254,8 +256,20 @@ class TestApply:
             connector.apply()
 
 
+def _last_cmnd(session):
+    return parse_qs(urlparse(session.requests[-1]).query)["cmnd"][0]
+
+
 def _backlog_requests(session):
     return [url for url in session.requests if "Backlog0" in url]
+
+
+def _backlog_payloads(session):
+    payloads = []
+    for url in _backlog_requests(session):
+        cmnd = parse_qs(urlparse(url).query)["cmnd"][0]
+        payloads.append(cmnd.split(" ", 1)[1].split(";"))
+    return payloads
 
 
 class TestExtractBootcount:

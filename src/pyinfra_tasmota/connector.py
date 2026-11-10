@@ -5,11 +5,13 @@ pulls a status dump to populate a cache of the device settings. Operations
 record their intent against that cache, and the pending commands are flushed
 to the device as ``Backlog0`` batches on disconnect.
 
-Tasmota writes every changed setting to flash. To avoid wear, a flush wraps
-its commands in ``SaveData 0`` (no automatic flash writes) followed by
-``SaveData 1`` (restore automatic writes). Because ``SaveData`` is persisted
-immediately and survives a reboot, the connector also checks and repairs it
-during connect.
+Tasmota writes every changed setting to flash. To avoid wear, a batch of
+non-rebooting commands is wrapped in ``SaveData 0`` (no automatic flash
+writes) followed by ``SaveData 1`` (restore automatic writes). Reboot
+triggering commands are not wrapped: a reboot drains or aborts the backlog, so
+a trailing ``SaveData 1`` could be lost. Because ``SaveData`` is persisted
+immediately and survives a reboot, the connector also checks and repairs a
+stuck value during connect.
 """
 
 from __future__ import annotations
@@ -33,8 +35,9 @@ if TYPE_CHECKING:
 
 log = logger.getChild("pyinfra-tasmota")
 
-# Tasmota's Backlog accepts at most this many commands. One slot is reserved
-# for the SaveData guard, so a batch carries at most this many real commands.
+# Tasmota's Backlog accepts at most this many commands. Two slots are
+# reserved for the SaveData 0 and SaveData 1 guard, so a batch carries at most
+# ``BACKLOG_MAX_COMMANDS - 2`` real commands.
 BACKLOG_MAX_COMMANDS = 30
 
 # How long to wait for a rebooted device to answer again, and how often to poll.
@@ -241,7 +244,7 @@ class TasmotaConnector(BaseConnector):
         immediate = [(s, v) for s, v in pending.items() if s.lower() not in REBOOT_COMMANDS]
         reboots = [(s, v) for s, v in pending.items() if s.lower() in REBOOT_COMMANDS]
 
-        for batch in _chunk(immediate, BACKLOG_MAX_COMMANDS - 1):
+        for batch in _chunk(immediate, BACKLOG_MAX_COMMANDS - 2):
             self._send_batch(batch)
 
         for subject, value in reboots:

@@ -37,9 +37,10 @@ cache. It reads the current value from the device if the setting is not
 cached, and records a pending change only if the value differs. Every command
 is sent by `apply`, or on disconnect as a safety net.
 
-Pending commands are flushed as `Backlog0` batches, wrapped in `SaveData 0`
-and `SaveData 1` to limit flash wear. A device left with `SaveData` stuck at
-`0` is repaired at connect.
+Non-rebooting commands are flushed as `Backlog0` batches, wrapped in
+`SaveData 0` and `SaveData 1` to limit flash wear. Reboot-triggering commands
+are sent on their own, without the guard. A device left with `SaveData` stuck
+at `0` is repaired at connect.
 
 ## Reboots
 
