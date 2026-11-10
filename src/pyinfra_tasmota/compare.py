@@ -13,7 +13,7 @@ import json
 import re
 from typing import Any
 
-from .connector import _canonical, _normalize
+from .connector import _canonical, _normalize, is_secret
 
 # Fields of the TimeSTD/TimeDST response, in the order the command accepts.
 _TIME_FIELDS = ("Hemisphere", "Week", "Month", "Day", "Hour", "Offset")
@@ -129,7 +129,6 @@ _ADAPTERS: dict[str, Adapter] = {
 }
 
 _PULSETIME_PATTERN = re.compile(r"pulsetime\d+$")
-_PASSWORD_PATTERN = re.compile(r"password\d+$")
 
 
 def adapter_for(command: str) -> Adapter:
@@ -144,6 +143,6 @@ def adapter_for(command: str) -> Adapter:
         return adapter
     if _PULSETIME_PATTERN.fullmatch(canonical):
         return _PULSETIME
-    if _PASSWORD_PATTERN.fullmatch(canonical):
+    if is_secret(command):
         return _MASKED
     return _DEFAULT

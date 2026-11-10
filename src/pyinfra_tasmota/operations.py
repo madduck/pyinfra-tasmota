@@ -11,7 +11,7 @@ from pyinfra.api.operation import operation
 from pyinfra.context import host
 
 from .compare import adapter_for
-from .connector import NO_READ_COMMANDS, TasmotaConnector, _canonical
+from .connector import NO_READ_COMMANDS, TasmotaConnector, _canonical, redact
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -70,7 +70,9 @@ def _queue_sequence(
     for one in values:
         connector.record(subject, str(one))
         if connector.executing:
-            connector.log_at(2, "%s: %s queued %s", connector.host.name, subject, one)
+            connector.log_at(
+                2, "%s: %s queued %s", connector.host.name, subject, redact(subject, one)
+            )
     return bool(values)
 
 
@@ -90,19 +92,29 @@ def _ensure(connector: TasmotaConnector, subject: str, value: Any) -> bool:
     observed = connector.raw(subject)
     if observed is None and _canonical(subject) not in NO_READ_COMMANDS:
         observed = _read_current(connector, subject)
-        connector.log_at(3, "%s: read %s as %s", connector.host.name, subject, observed)
+        connector.log_at(
+            3, "%s: read %s as %s", connector.host.name, subject, redact(subject, observed)
+        )
 
     if observed is not None and adapter.matches(value, observed):
         if connector.executing:
             connector.log_at(
-                2, "%s: %s is already %s, skipping", connector.host.name, subject, observed
+                2,
+                "%s: %s is already %s, skipping",
+                connector.host.name,
+                subject,
+                redact(subject, observed),
             )
         return False
 
     if connector.executing:
         if observed is None:
             connector.log_at(
-                2, "%s: %s state unknown, will set to %s", connector.host.name, subject, desired
+                2,
+                "%s: %s state unknown, will set to %s",
+                connector.host.name,
+                subject,
+                redact(subject, desired),
             )
         else:
             connector.log_at(
@@ -110,8 +122,8 @@ def _ensure(connector: TasmotaConnector, subject: str, value: Any) -> bool:
                 "%s: %s is %s, will set to %s",
                 connector.host.name,
                 subject,
-                observed,
-                desired,
+                redact(subject, observed),
+                redact(subject, desired),
             )
     connector.record(subject, desired)
     return True

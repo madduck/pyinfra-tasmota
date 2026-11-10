@@ -364,6 +364,14 @@ class TestVerbosityLogging:
         assert "tasmota.example.org: Rule1 queued ON" in caplog.messages
         assert "tasmota.example.org: Rule1 queued 1" in caplog.messages
 
+    def test_level_two_masks_queued_secret(self, use_connector, status0, caplog):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        connector.state = make_state(2)
+        with caplog.at_level(logging.INFO):
+            list(cmnd._inner(Password1=["hunter2"]))
+        assert "tasmota.example.org: Password1 queued ***" in caplog.messages
+        assert not any("hunter2" in message for message in caplog.messages)
+
     def test_level_two_logs_unknown_state(self, use_connector, status0, caplog):
         connector = use_connector({"Status 0": status0, "Status 13": []})
         connector.state = make_state(2)

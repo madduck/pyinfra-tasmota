@@ -9,6 +9,7 @@ or on disconnect.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
@@ -350,7 +351,7 @@ class TasmotaConnector(BaseConnector):
             len(BACKLOG_PREFIX) + len(commands),
         )
         for subject, value in batch:
-            self.log_at(1, "%s: sent %s %s", self.host.name, subject, value)
+            self.log_at(1, "%s: sent %s %s", self.host.name, subject, redact(subject, value))
             self.cache(subject, value)
 
     def _send_reboot(self, subject: str, value: str) -> None:
@@ -359,7 +360,7 @@ class TasmotaConnector(BaseConnector):
         A reboot drains or aborts the backlog, so the command must stand alone.
         """
         self._request(f"{subject} {value}")
-        self.log_at(1, "%s: sent %s %s", self.host.name, subject, value)
+        self.log_at(1, "%s: sent %s %s", self.host.name, subject, redact(subject, value))
         self._await_reboot()
 
     def _await_reboot(self) -> None:
@@ -461,6 +462,21 @@ def _canonical(subject: str) -> str:
     if name.startswith("so") and (name == "so" or name[2:].isdigit()):
         return "setoption" + name[2:]
     return name
+
+
+# Commands whose value is a secret. Tasmota masks them as *** in responses,
+# and the connector must not log them either.
+_SECRET_PATTERN = re.compile(r"(?:mqtt)?password\d*$")
+
+
+def is_secret(command: str) -> bool:
+    """Return whether a command's value is a secret."""
+    return _SECRET_PATTERN.fullmatch(_canonical(command)) is not None
+
+
+def redact(command: str, value: Any) -> Any:
+    """Return ``value``, or a mask when the command's value is a secret."""
+    return "***" if is_secret(command) else value
 
 
 def _normalize(value: Any) -> str:

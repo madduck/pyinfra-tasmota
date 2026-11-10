@@ -120,6 +120,8 @@ The connector follows pyinfra's `-v` flags:
 - `-vvv` also reports internal detail, such as the size of the status cache
   and how commands are grouped into `Backlog0` batches.
 
+Secret values (passwords) are masked as `***` in these logs.
+
 ## Versioning
 
 The package version comes from Git via `uv-dynamic-versioning`. Tag a release

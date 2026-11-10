@@ -21,6 +21,8 @@ from pyinfra_tasmota.connector import (
     _extract_bootcount,
     _normalize,
     _split_host_port,
+    is_secret,
+    redact,
 )
 from tests.conftest import CatchAll, FakeResponse, make_state
 
@@ -100,6 +102,17 @@ class TestCommandSets:
     def test_action_commands_are_never_read(self):
         for command in ("backlog", "backlog0", "delay", "restart", "reset"):
             assert command in NO_READ_COMMANDS
+
+
+class TestSecret:
+    def test_is_secret(self):
+        for name in ("Password1", "password2", "MqttPassword", "password"):
+            assert is_secret(name) is True
+        assert is_secret("SetOption114") is False
+
+    def test_redact(self):
+        assert redact("Password1", "hunter2") == "***"
+        assert redact("SetOption114", "1") == "1"
 
 
 class TestBacklogBatches:
@@ -437,6 +450,37 @@ class TestVerbosity:
         assert any("flushing 1 commands" in message for message in caplog.messages)
         assert any("batch of 1 commands" in message for message in caplog.messages)
         assert "tasmota.example.org: sent SetOption114 1" in caplog.messages
+
+    def test_masks_passwords_in_sent_log(self, make_connector, status0, caplog):
+        connector = make_connector({"Status 0": status0, "Status 13": []})
+        connector.state = make_state(1)
+        connector.record("Password1", "hunter2")
+        connector.session.responses = CatchAll()
+        with caplog.at_level(logging.INFO):
+            connector.apply()
+        assert "tasmota.example.org: sent Password1 ***" in caplog.messages
+        assert not any("hunter2" in message for message in caplog.messages)
+
+    def test_masks_passwords_in_reboot_log(self, make_connector, status0, caplog, monkeypatch):
+        monkeypatch.setattr("pyinfra_tasmota.connector.time.sleep", lambda _seconds: None)
+
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 13":
+                return {}
+            if cmnd == "Status 1":
+                return {"StatusPRM": {"BootCount": 6}}
+            return {}
+
+        connector = make_connector(handler)
+        connector.state = make_state(1)
+        connector.connect()
+        connector.record("MqttPassword", "hunter2")
+        with caplog.at_level(logging.INFO):
+            connector.apply()
+        assert "tasmota.example.org: sent MqttPassword ***" in caplog.messages
+        assert not any("hunter2" in message for message in caplog.messages)
 
     def test_level_three_reports_reboot(self, make_connector, status0, caplog, monkeypatch):
         monkeypatch.setattr("pyinfra_tasmota.connector.time.sleep", lambda _seconds: None)
