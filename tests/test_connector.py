@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -19,7 +20,7 @@ from pyinfra_tasmota.connector import (
     _normalize,
     _split_host_port,
 )
-from tests.conftest import CatchAll, FakeResponse
+from tests.conftest import CatchAll, FakeResponse, make_state
 
 
 class TestMakeNamesData:
@@ -236,7 +237,7 @@ class TestApply:
                 return {}
             if cmnd == "Status 1":
                 pings.append(cmnd)
-                if len(pings) == 1:
+                if len(pings) <= 2:
                     return requests.ConnectionError("rebooting")
                 return {"StatusPRM": {"BootCount": 6}}
             return {}
@@ -374,3 +375,69 @@ class TestUnsupported:
         connector = make_connector({})
         with pytest.raises(NotImplementedError):
             connector.get_file("remote", None, None, False, False)
+
+
+class TestVerbosity:
+    def test_levels(self, make_connector):
+        connector = make_connector({})
+        assert connector.verbosity == 0
+        connector.state = make_state(1)
+        assert connector.verbosity == 1
+        connector.state = make_state(2)
+        assert connector.verbosity == 2
+        connector.state = make_state(3)
+        assert connector.verbosity == 3
+
+    def test_silent_by_default(self, make_connector, status0, caplog):
+        connector = make_connector({"Status 0": status0, "Status 13": []})
+        connector.connect()
+        connector.record("SetOption114", 1)
+        connector.session.responses = CatchAll()
+        with caplog.at_level(logging.INFO):
+            connector.apply()
+        assert caplog.messages == []
+
+    def test_level_one_reports_sent_commands(self, make_connector, status0, caplog):
+        connector = make_connector({"Status 0": status0, "Status 13": []})
+        connector.state = make_state(1)
+        connector.connect()
+        connector.record("SetOption114", 1)
+        connector.session.responses = CatchAll()
+        with caplog.at_level(logging.INFO):
+            connector.apply()
+        assert "tasmota.example.org: sent SetOption114 1" in caplog.messages
+        assert not any("batch" in message for message in caplog.messages)
+
+    def test_level_three_reports_internals(self, make_connector, status0, caplog):
+        connector = make_connector({"Status 0": status0, "Status 13": []})
+        connector.state = make_state(3)
+        with caplog.at_level(logging.INFO):
+            connector.connect()
+            connector.record("SetOption114", 1)
+            connector.session.responses = CatchAll()
+            connector.apply()
+        assert any("cached" in message for message in caplog.messages)
+        assert any("flushing 1 commands" in message for message in caplog.messages)
+        assert any("batch of 1 commands" in message for message in caplog.messages)
+        assert "tasmota.example.org: sent SetOption114 1" in caplog.messages
+
+    def test_level_three_reports_reboot(self, make_connector, status0, caplog, monkeypatch):
+        monkeypatch.setattr("pyinfra_tasmota.connector.time.sleep", lambda _seconds: None)
+
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 13":
+                return {}
+            if cmnd == "Status 1":
+                return {"StatusPRM": {"BootCount": 6}}
+            return {}
+
+        connector = make_connector(handler)
+        connector.state = make_state(3)
+        connector.connect()
+        connector.record("Restart", 1)
+        with caplog.at_level(logging.INFO):
+            connector.apply()
+        assert "tasmota.example.org: sent Restart 1" in caplog.messages
+        assert any("after reboot" in message for message in caplog.messages)

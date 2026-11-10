@@ -102,6 +102,43 @@ class TasmotaConnector(BaseConnector):
         self._cache: dict[str, Any] = {}
         self._pending: dict[str, tuple[str, str]] = {}
 
+    @property
+    def verbosity(self) -> int:
+        """Return the verbosity implied by pyinfra's ``-v`` flags.
+
+        pyinfra does not raise the logging level for ``-v``; it sets display
+        flags on the state. ``-v`` sets ``print_noop_info``, ``-vv`` adds
+        ``print_input``, and ``-vvv`` adds ``print_output``.
+        """
+        state = self.state
+        if getattr(state, "print_output", False):
+            return 3
+        if getattr(state, "print_input", False):
+            return 2
+        if getattr(state, "print_noop_info", False):
+            return 1
+        return 0
+
+    @property
+    def executing(self) -> bool:
+        """Return whether operations are executing, not just being prepared.
+
+        pyinfra runs an operation's command generator once during change
+        detection and again during execution. Logging only while executing
+        avoids emitting the same line twice.
+        """
+        return bool(getattr(self.state, "is_executing", False))
+
+    def log_at(self, level: int, message: str, *args: Any) -> None:
+        """Log ``message`` when the verbosity is at least ``level``.
+
+        Level 1 (``-v``) reports commands sent, level 2 (``-vv``) reports
+        observed state and skipped commands, and level 3 (``-vvv``) reports
+        internal detail such as batching.
+        """
+        if self.verbosity >= level:
+            log.info(message, *args)
+
     @staticmethod
     def make_names_data(name: str | None = None) -> Any:
         """Yield the Tasmota host described by ``name``.
@@ -156,7 +193,7 @@ class TasmotaConnector(BaseConnector):
         if isinstance(shutters, dict):
             self._merge(shutters)
 
-        log.debug("%s: cached %d settings", self.host.name, len(self._cache))
+        self.log_at(3, "%s: cached %d settings", self.host.name, len(self._cache))
 
     def _merge(self, sections: dict[str, Any]) -> None:
         """Merge numbered status sections into the cache, keyed canonically."""
@@ -247,6 +284,15 @@ class TasmotaConnector(BaseConnector):
         immediate = [command for key, command in pending.items() if key not in REBOOT_COMMANDS]
         reboots = [command for key, command in pending.items() if key in REBOOT_COMMANDS]
 
+        self.log_at(
+            3,
+            "%s: flushing %d commands (%d batched, %d reboot)",
+            self.host.name,
+            len(pending),
+            len(immediate),
+            len(reboots),
+        )
+
         for batch in _backlog_batches(immediate):
             self._send_batch(batch)
 
@@ -257,7 +303,15 @@ class TasmotaConnector(BaseConnector):
         """Send a batch of non-rebooting commands as a single Backlog0."""
         commands = ";".join(f"{subject} {value}" for subject, value in batch)
         self._request(f"{BACKLOG_PREFIX}{commands}")
+        self.log_at(
+            3,
+            "%s: sent a batch of %d commands (%d characters)",
+            self.host.name,
+            len(batch),
+            len(BACKLOG_PREFIX) + len(commands),
+        )
         for subject, value in batch:
+            self.log_at(1, "%s: sent %s %s", self.host.name, subject, value)
             self.cache(subject, value)
 
     def _send_reboot(self, subject: str, value: str) -> None:
@@ -266,6 +320,7 @@ class TasmotaConnector(BaseConnector):
         A reboot drains or aborts the backlog, so the command must stand alone.
         """
         self._request(f"{subject} {value}")
+        self.log_at(1, "%s: sent %s %s", self.host.name, subject, value)
         self._await_reboot()
 
     def _await_reboot(self) -> None:
@@ -284,16 +339,20 @@ class TasmotaConnector(BaseConnector):
         deadline = time.monotonic() + timeout
         saw_down = False
 
+        self.log_at(3, "%s: waiting for the device to answer after reboot", self.host.name)
+
         while time.monotonic() < deadline:
             reply = self._request("Status 1", allow_missing=True)
             if reply is None:
+                if not saw_down:
+                    self.log_at(3, "%s: device is down", self.host.name)
                 saw_down = True
             else:
                 boot = _extract_bootcount(reply)
                 if saw_down or (
                     previous_boot is not None and boot is not None and str(boot) != previous_boot
                 ):
-                    log.info("%s: device is back after reboot", self.host.name)
+                    self.log_at(3, "%s: device is back after reboot", self.host.name)
                     self._ingest()
                     return
             time.sleep(REBOOT_POLL_INTERVAL)

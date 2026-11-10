@@ -52,10 +52,33 @@ def cmnd(**kwargs: Any) -> Generator[PyinfraCommand, None, None]:
         current = connector.current(subject)
         if current is None and _canonical(subject) not in REBOOT_COMMANDS:
             current = _read_current(connector, subject)
+            connector.log_at(3, "%s: read %s as %s", connector.host.name, subject, current)
 
         if current is not None and _normalize(current) == _normalize(desired):
+            if connector.executing:
+                connector.log_at(
+                    2, "%s: %s is already %s, skipping", connector.host.name, subject, current
+                )
             continue
 
+        if connector.executing:
+            if current is None:
+                connector.log_at(
+                    2,
+                    "%s: %s state unknown, will set to %s",
+                    connector.host.name,
+                    subject,
+                    desired,
+                )
+            else:
+                connector.log_at(
+                    2,
+                    "%s: %s is %s, will set to %s",
+                    connector.host.name,
+                    subject,
+                    current,
+                    desired,
+                )
         connector.record(subject, desired)
         changed = True
 

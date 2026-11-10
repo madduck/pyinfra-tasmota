@@ -54,6 +54,16 @@ its `BootCount` has advanced.
 
 If the device does not return within the timeout, `apply` reports an error.
 
+## Verbosity
+
+The connector follows pyinfra's `-v` flags:
+
+- `-v` reports every command sent to the device.
+- `-vv` also reports the observed state of each command, and any command
+  skipped because the device already matches the desired value.
+- `-vvv` also reports internal detail, such as the size of the status cache
+  and how commands are grouped into `Backlog0` batches.
+
 ## Connector data
 
 Set these on a host in the inventory:

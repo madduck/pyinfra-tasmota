@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from pyinfra_tasmota import operations
 from pyinfra_tasmota.operations import apply, cmnd
-from tests.conftest import CatchAll
+from tests.conftest import CatchAll, make_state
 
 
 class FakeHost:
@@ -198,4 +200,44 @@ class TestApply:
         connector.record("SetOption114", 1)
         command = next(iter(apply._inner()))
         assert command.execute(None, FakeHost(connector), {}) is False
-        assert connector.current("SetOption120") is None
+
+
+class TestVerbosityLogging:
+    def test_level_one_does_not_log_state(self, use_connector, status0, caplog):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        connector.state = make_state(1)
+        with caplog.at_level(logging.INFO):
+            list(cmnd._inner(SetOption114=0))
+        assert caplog.messages == []
+
+    def test_level_two_logs_skip(self, use_connector, status0, caplog):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        connector.state = make_state(2)
+        with caplog.at_level(logging.INFO):
+            list(cmnd._inner(SetOption114=0))
+        assert "tasmota.example.org: SetOption114 is already 0, skipping" in caplog.messages
+
+    def test_level_three_logs_read_and_change(self, use_connector, status0, caplog):
+        status0["Status"].pop("SetOption114", None)
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": [], "SetOption120": {"SetOption120": 0}}
+        )
+        connector.state = make_state(3)
+        with caplog.at_level(logging.INFO):
+            list(cmnd._inner(SetOption120=1))
+        assert "tasmota.example.org: read SetOption120 as 0" in caplog.messages
+        assert "tasmota.example.org: SetOption120 is 0, will set to 1" in caplog.messages
+
+    def test_level_two_logs_unknown_state(self, use_connector, status0, caplog):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        connector.state = make_state(2)
+        with caplog.at_level(logging.INFO):
+            list(cmnd._inner(Unknown="x"))
+        assert "tasmota.example.org: Unknown state unknown, will set to x" in caplog.messages
+
+    def test_not_executing_does_not_log_state(self, use_connector, status0, caplog):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        connector.state = make_state(2, executing=False)
+        with caplog.at_level(logging.INFO):
+            list(cmnd._inner(SetOption114=0, Unknown="x"))
+        assert caplog.messages == []

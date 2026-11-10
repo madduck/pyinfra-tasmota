@@ -2,12 +2,30 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import requests
 
 from pyinfra_tasmota.connector import TasmotaConnector
+
+
+def make_state(verbosity: int, executing: bool = True) -> Any:
+    """Build a stand-in state with pyinfra's ``-v`` display flags set."""
+    flags = SimpleNamespace(
+        print_noop_info=False,
+        print_input=False,
+        print_output=False,
+        is_executing=executing,
+    )
+    if verbosity >= 1:
+        flags.print_noop_info = True
+    if verbosity >= 2:
+        flags.print_input = True
+    if verbosity >= 3:
+        flags.print_output = True
+    return flags
 
 
 class CatchAll(dict[str, Any]):
