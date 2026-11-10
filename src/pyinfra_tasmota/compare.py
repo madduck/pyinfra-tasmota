@@ -259,3 +259,8 @@ def adapter_for(command: str) -> Adapter:
     if is_secret(command):
         return _MASKED
     return _DEFAULT
+
+
+def is_rule(command: str) -> bool:
+    """Return whether a command names a rule set (``Rule1``, ``Rule2``, ...)."""
+    return _RULE_PATTERN.fullmatch(_canonical(command)) is not None

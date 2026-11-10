@@ -70,6 +70,44 @@ class TestEnsureHostData:
         with pytest.raises(TypeError):
             list(ensure_host_data._inner())
 
+    def test_list_value_is_queued(self, use_connector, status0):
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": []},
+            data={"tasmota": {"SetOption114": [0, 1]}},
+        )
+        assert len(list(ensure_host_data._inner())) == 1
+        assert list(connector._pending) == [("setoption114", "0"), ("setoption114", "1")]
+
+    def test_rule_code_is_sent_directly(self, use_connector, status0):
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 13":
+                return {}
+            if cmnd == "Rule1":
+                return {"Rule1": {"State": "OFF", "Rules": ""}}
+            return {}
+
+        connector = use_connector(handler, data={"tasmota": {"Rule1": "ON x DO y ENDON"}})
+        commands = list(ensure_host_data._inner())
+        assert len(commands) == 1
+        assert commands[0].execute(None, FakeHost(connector), {}) is True
+        assert any("Rule1+ON+x+DO+y+ENDON" in url for url in connector.session.requests)
+
+    def test_rule_mapping_sets_flags(self, use_connector, status0):
+        responses = {
+            "Status 0": status0,
+            "Status 13": [],
+            "Rule1": {"Rule1": {"State": "OFF", "Once": "OFF", "Rules": "on x do y endon"}},
+        }
+        connector = use_connector(
+            responses,
+            data={"tasmota": {"Rule1": {"code": "ON x DO y ENDON", "enabled": True}}},
+        )
+        commands = list(ensure_host_data._inner())
+        assert len(commands) == 1
+        assert ("rule1", "1") in connector._pending
+
 
 class TestCmnd:
     def test_no_change_yields_nothing(self, use_connector, status0):

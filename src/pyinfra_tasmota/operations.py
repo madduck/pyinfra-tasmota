@@ -10,7 +10,7 @@ from pyinfra.api.exceptions import PyinfraError
 from pyinfra.api.operation import operation
 from pyinfra.context import host
 
-from .compare import adapter_for
+from .compare import adapter_for, is_rule
 from .connector import NO_READ_COMMANDS, TasmotaConnector, _canonical, is_secret, redact
 
 if TYPE_CHECKING:
@@ -66,19 +66,41 @@ def ensure_host_data(
     host that registered it, so passing host-specific arguments would create
     one operation per host and print "Skipped" for all the others.
 
+    ``Rule<x>`` keys are handled like the ``rule`` operation: the value is the
+    rule text, or a mapping of its arguments. Their text is sent directly,
+    because it can contain semicolons.
+
     Args:
         key: The host-data key holding a mapping of command to value.
         send_passwords: When False, password commands are left out.
 
     Yields:
-        At most one marker command when any value must change.
+        At most one command per changed rule, or a marker for other changes.
     """
     commands = host.data.get(key, {})
     if not isinstance(commands, dict):
         raise TypeError(f"host data {key!r} must be a mapping of command to value")
     if not send_passwords:
         commands = {name: value for name, value in commands.items() if not is_secret(name)}
-    if _ensure_all(_connector(), commands):
+
+    connector = _connector()
+    rule_sends: list[tuple[str, str]] = []
+    changed = False
+    for subject, value in commands.items():
+        if is_rule(subject):
+            index = _rule_index(subject)
+            send_code, rule_changed = _ensure_rule(connector, index, **_rule_spec(value))
+            if send_code is not None:
+                rule_sends.append((f"Rule{index}", send_code))
+            changed = rule_changed or changed
+        elif isinstance(value, (list, tuple)):
+            changed = _queue_sequence(connector, subject, value) or changed
+        else:
+            changed = _ensure(connector, subject, value) or changed
+
+    for subject, value in rule_sends:
+        yield _send_rule(subject, value)
+    if changed and not rule_sends:
         yield _marker()
 
 
@@ -172,10 +194,40 @@ def rule(
         At most one command.
     """
     connector = _connector()
+    send_code, changed = _ensure_rule(
+        connector,
+        index,
+        code,
+        enabled=enabled,
+        once=once,
+        stop_on_error=stop_on_error,
+        append=append,
+    )
+    if send_code is not None:
+        yield _send_rule(f"Rule{index}", send_code)
+    elif changed:
+        yield _marker()
+
+
+def _ensure_rule(
+    connector: TasmotaConnector,
+    index: int,
+    code: str,
+    *,
+    enabled: bool | None = None,
+    once: bool | None = None,
+    stop_on_error: bool | None = None,
+    append: bool = False,
+) -> tuple[str | None, bool]:
+    """Ensure one rule set.
+
+    Returns the rule text to send directly, if it must change, and whether a
+    flag changed. The text is returned rather than queued because it can
+    contain semicolons, which cannot go into a backlog.
+    """
     subject = f"Rule{index}"
     code_value = f"+{code}" if append else code
-
-    send_code = append or _needs_change(connector, subject, code_value)
+    send_code = code_value if (append or _needs_change(connector, subject, code_value)) else None
 
     changed = False
     if enabled is not None:
@@ -184,11 +236,22 @@ def rule(
         changed = _ensure(connector, subject, "5" if once else "4") or changed
     if stop_on_error is not None:
         changed = _ensure(connector, subject, "9" if stop_on_error else "8") or changed
+    return send_code, changed
 
-    if send_code:
-        yield _send_rule(subject, code_value)
-    elif changed:
-        yield _marker()
+
+def _rule_index(subject: str) -> int:
+    """Return the rule set number from a ``Rule<x>`` command name."""
+    return int(_canonical(subject)[len("rule") :])
+
+
+def _rule_spec(value: Any) -> dict[str, Any]:
+    """Return the ``rule`` arguments for a host-data value.
+
+    A mapping is used as keyword arguments; anything else is the rule text.
+    """
+    if isinstance(value, dict):
+        return dict(value)
+    return {"code": value}
 
 
 def _send_rule(subject: str, value: str) -> PyinfraCommand:

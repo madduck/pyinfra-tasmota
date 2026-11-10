@@ -88,13 +88,21 @@ tasmota()
 hosts = (
     ["@tasmota/tasmota.example.org"],
     {
-        "tasmota": {"SetOption114": 1, "Rule1": ["ON clock DO power ENDON", "1"]},
+        "tasmota": {
+            "SetOption114": 1,
+            "Rule1": {"code": "ON clock DO power ENDON", "enabled": True},
+        },
     },
 )
 ```
 
 The key holds a mapping of command name to a value or a list of values. The
 deploy ensures each command and then calls `apply`.
+
+`Rule<x>` keys are handled like the `rule` operation rather than as ordinary
+commands: the value is the rule text, or a mapping with `code` and the flags
+(`enabled`, `once`, `stop_on_error`, `append`). Their text is sent directly,
+because it can contain semicolons.
 
 Password commands are sent by default. Call `tasmota(send_passwords=False)` to
 leave `Password1`, `Password2`, and `MqttPassword` out of the run.
