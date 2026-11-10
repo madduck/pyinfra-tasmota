@@ -124,6 +124,11 @@ class TestJsonAdapter:
         desired = {"NAME": "x", "GPIO": [0, 1], "FLAG": 0, "BASE": 18}
         assert adapter_for("Template").matches(desired, ARCH_TEMPLATE)
 
+    def test_ignores_cmnd(self):
+        desired = {**ARCH_TEMPLATE, "CMND": "SetOption114 1; Power ON"}
+        assert adapter_for("Template").matches(desired, ARCH_TEMPLATE)
+        assert adapter_for("Template").matches(ARCH_TEMPLATE, desired)
+
     def test_accepts_json_string(self):
         desired = '{"NAME":"x","GPIO":[0,1],"FLAG":0,"BASE":18}'
         assert adapter_for("Template").matches(desired, ARCH_TEMPLATE)

@@ -259,7 +259,7 @@ _ADAPTERS: dict[str, Adapter] = {
     "longitude": _Approximate(_COORDINATE_TOLERANCE),
     "mqttpassword": _MASKED,
     "fulltopic": _Alias({"1": _MQTT_FULLTOPIC}),
-    "template": _Json(ignore=("ARCH",), whole=True),
+    "template": _Json(ignore=("ARCH", "CMND"), whole=True),
     "interlock": _Interlock(),
 }
 
