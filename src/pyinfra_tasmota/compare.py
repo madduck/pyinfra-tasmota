@@ -267,11 +267,11 @@ _ADAPTERS: dict[str, Adapter] = {
 # keeps one decimal place. ShutterButtons answer with an expanded config of
 # which the desired value is a prefix.
 _SHUTTER_DURATION = _Decimal(1)
-_SHUTTER_DURATION_PATTERN = re.compile(r"shutter(?:open|close)duration\d+$")
+_SHUTTER_DURATION_PATTERN = re.compile(r"shutter(?:open|close)duration\d*$")
 _SHUTTER_BUTTON = _Prefix()
-_SHUTTER_BUTTON_PATTERN = re.compile(r"shutterbutton\d+$")
+_SHUTTER_BUTTON_PATTERN = re.compile(r"shutterbutton\d*$")
 
-_PULSETIME_PATTERN = re.compile(r"pulsetime\d+$")
+_PULSETIME_PATTERN = re.compile(r"pulsetime\d*$")
 _RULE_PATTERN = re.compile(r"rule\d+$")
 
 

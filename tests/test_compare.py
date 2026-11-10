@@ -47,6 +47,8 @@ class TestStructAdapter:
 class TestFieldAdapter:
     def test_pulsetime_compares_set(self):
         assert adapter_for("Pulsetime3").matches(10, {"Set": 10, "Remaining": 5})
+        # The bare command applies to output 1, so it uses the same adapter.
+        assert adapter_for("Pulsetime").matches(10, {"Set": 10, "Remaining": 5})
 
     def test_differs(self):
         assert not adapter_for("Pulsetime3").matches(11, {"Set": 10, "Remaining": 5})
@@ -76,6 +78,13 @@ class TestShutterDurationAdapter:
         assert adapter_for("ShutterOpenDuration1").matches(32.26, 32.3)
         assert adapter_for("ShutterCloseDuration1").matches("12", "12.0")
 
+    def test_index_is_optional(self):
+        # The bare command applies to shutter 1, so it must round too.
+        assert adapter_for("ShutterCloseDuration").prepare(32.26) == "32.3"
+
+    def test_end_stop_time_is_not_a_duration(self):
+        assert adapter_for("ShutterOpenEndStopTime").prepare(32.26) == 32.26
+
     def test_differs(self):
         assert not adapter_for("ShutterOpenDuration1").matches(12.3, 13.3)
 
@@ -89,6 +98,8 @@ class TestShutterDurationAdapter:
 class TestShutterButtonAdapter:
     def test_prefix_matches(self):
         assert adapter_for("ShutterButton1").matches("1 up", "1 up 100/0 50/0")
+        # The bare command applies to shutter 1, so it uses the same adapter.
+        assert adapter_for("ShutterButton").matches("1 up", "1 up 100/0 50/0")
 
     def test_not_a_prefix(self):
         assert not adapter_for("ShutterButton1").matches("1 down", "1 up 100/0")
