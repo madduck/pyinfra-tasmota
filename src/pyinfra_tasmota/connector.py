@@ -28,8 +28,12 @@ if TYPE_CHECKING:
 
 log = logger.getChild("pyinfra-tasmota")
 
-# Tasmota's Backlog accepts at most this many commands.
+# Tasmota's Backlog accepts at most this many commands. decode-config caps the
+# full Backlog command line at this many characters; both limits are enforced
+# when grouping commands into batches.
 BACKLOG_MAX_COMMANDS = 30
+BACKLOG_MAX_LENGTH = 320
+BACKLOG_PREFIX = "Backlog0 "
 
 # How long to wait for a rebooted device to answer again, and how often to poll.
 DEFAULT_REBOOT_TIMEOUT = 60.0
@@ -233,7 +237,7 @@ class TasmotaConnector(BaseConnector):
         immediate = [(s, v) for s, v in pending.items() if s.lower() not in REBOOT_COMMANDS]
         reboots = [(s, v) for s, v in pending.items() if s.lower() in REBOOT_COMMANDS]
 
-        for batch in _chunk(immediate, BACKLOG_MAX_COMMANDS):
+        for batch in _backlog_batches(immediate):
             self._send_batch(batch)
 
         for subject, value in reboots:
@@ -242,7 +246,7 @@ class TasmotaConnector(BaseConnector):
     def _send_batch(self, batch: list[tuple[str, str]]) -> None:
         """Send a batch of non-rebooting commands as a single Backlog0."""
         commands = ";".join(f"{subject} {value}" for subject, value in batch)
-        self._request(f"Backlog0 {commands}")
+        self._request(f"{BACKLOG_PREFIX}{commands}")
         for subject, value in batch:
             self._cache[subject] = value
 
@@ -348,7 +352,27 @@ def _extract_bootcount(reply: Any) -> Any:
     return None
 
 
-def _chunk(items: list[Any], size: int) -> Iterator[list[Any]]:
-    """Yield consecutive chunks of at most ``size`` items."""
-    for index in range(0, len(items), size):
-        yield items[index : index + size]
+def _backlog_batches(
+    commands: list[tuple[str, str]],
+) -> Iterator[list[tuple[str, str]]]:
+    """Group commands into Backlog0 batches within the count and length limits.
+
+    Tasmota's Backlog accepts at most ``BACKLOG_MAX_COMMANDS`` commands, and
+    decode-config caps the full command line at ``BACKLOG_MAX_LENGTH``
+    characters. A single command longer than the length limit is still sent on
+    its own, so that batching always makes progress.
+    """
+    batch: list[tuple[str, str]] = []
+    length = len(BACKLOG_PREFIX)
+    for subject, value in commands:
+        command = f"{subject} {value}"
+        addition = len(command) + (1 if batch else 0)  # separator ";"
+        if batch and (len(batch) >= BACKLOG_MAX_COMMANDS or length + addition > BACKLOG_MAX_LENGTH):
+            yield batch
+            batch = []
+            length = len(BACKLOG_PREFIX)
+            addition = len(command)
+        batch.append((subject, value))
+        length += addition
+    if batch:
+        yield batch

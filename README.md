@@ -37,8 +37,9 @@ cache. It reads the current value from the device if the setting is not
 cached, and records a pending change only if the value differs. Every command
 is sent by `apply`, or on disconnect as a safety net.
 
-Non-rebooting commands are flushed as `Backlog0` batches. Reboot-triggering
-commands are sent on their own.
+Non-rebooting commands are flushed as `Backlog0` batches, split to stay
+within Tasmota's limit of 30 commands and decode-config's limit of 320
+characters per command line. Reboot-triggering commands are sent on their own.
 
 ## Reboots
 

@@ -10,8 +10,10 @@ from pyinfra.api.exceptions import ConnectError, InventoryError, PyinfraError
 
 from pyinfra_tasmota.connector import (
     BACKLOG_MAX_COMMANDS,
+    BACKLOG_MAX_LENGTH,
+    BACKLOG_PREFIX,
     TasmotaConnector,
-    _chunk,
+    _backlog_batches,
     _extract_bootcount,
     _split_host_port,
 )
@@ -51,12 +53,30 @@ class TestSplitHostPort:
         assert _split_host_port("tasmota.example.org:81") == ("tasmota.example.org", 81)
 
 
-class TestChunk:
-    def test_chunks(self):
-        assert list(_chunk([1, 2, 3, 4, 5], 2)) == [[1, 2], [3, 4], [5]]
-
+class TestBacklogBatches:
     def test_empty(self):
-        assert list(_chunk([], 2)) == []
+        assert list(_backlog_batches([])) == []
+
+    def test_count_limit(self):
+        commands = [(f"S{index}", "1") for index in range(BACKLOG_MAX_COMMANDS + 1)]
+        batches = list(_backlog_batches(commands))
+        assert [len(batch) for batch in batches] == [BACKLOG_MAX_COMMANDS, 1]
+
+    def test_length_limit(self):
+        commands = [("Long", "x" * 200), ("Long2", "y" * 200)]
+        batches = list(_backlog_batches(commands))
+        assert [len(batch) for batch in batches] == [1, 1]
+
+    def test_single_oversized_command_makes_progress(self):
+        batches = list(_backlog_batches([("Huge", "z" * 400)]))
+        assert [len(batch) for batch in batches] == [1]
+
+    def test_rendered_batches_fit(self):
+        commands = [(f"SetOption{index}", str(index)) for index in range(100)]
+        for batch in _backlog_batches(commands):
+            rendered = ";".join(f"{subject} {value}" for subject, value in batch)
+            assert len(BACKLOG_PREFIX + rendered) <= BACKLOG_MAX_LENGTH
+            assert len(batch) <= BACKLOG_MAX_COMMANDS
 
 
 class TestConnect:
@@ -148,17 +168,29 @@ class TestApply:
         connector.apply()
         assert len(connector.session.requests) == count
 
-    def test_batch_respects_backlog_limit(self, make_connector, status0):
+    def test_batches_respect_backlog_limits(self, make_connector, status0):
         connector = make_connector({"Status 0": status0, "Status 13": []})
         connector.connect()
-        for index in range(BACKLOG_MAX_COMMANDS + 1):
-            connector.record(f"SetOption{index}", 1)
+        for index in range(40):
+            connector.record(f"SetOption{index}", index)
+        connector.session.responses = CatchAll()
+        connector.apply()
+        batches = _backlog_payloads(connector.session)
+        assert len(batches) > 1
+        for commands in batches:
+            assert len(commands) <= BACKLOG_MAX_COMMANDS
+            assert len(BACKLOG_PREFIX + ";".join(commands)) <= BACKLOG_MAX_LENGTH
+
+    def test_long_command_is_sent_alone(self, make_connector, status0):
+        connector = make_connector({"Status 0": status0, "Status 13": []})
+        connector.connect()
+        connector.record("Short", 1)
+        connector.record("Long", "x" * 300)
         connector.session.responses = CatchAll()
         connector.apply()
         batches = _backlog_payloads(connector.session)
         assert len(batches) == 2
-        for commands in batches:
-            assert len(commands) <= BACKLOG_MAX_COMMANDS
+        assert batches[-1] == ["Long " + "x" * 300]
 
     def test_reboot_commands_are_sent_last_and_unwrapped(
         self, make_connector, status0, monkeypatch
