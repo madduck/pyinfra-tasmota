@@ -120,9 +120,9 @@ def shutter(
     to return before the remaining settings are sent.
 
     Args:
-        open_duration: Seconds to open fully, truncated to one decimal
+        open_duration: Seconds to open fully, rounded to one decimal
             (``ShutterOpenDuration``).
-        close_duration: Seconds to close fully, truncated to one decimal
+        close_duration: Seconds to close fully, rounded to one decimal
             (``ShutterCloseDuration``).
         interlock: Relay pair to interlock, sent first (``Interlock``).
         mode: Shutter mode (``ShutterMode``), default ``1``.

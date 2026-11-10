@@ -71,9 +71,9 @@ class TestApproximateAdapter:
 
 
 class TestShutterDurationAdapter:
-    def test_truncates_to_one_decimal(self):
-        # The device stores tenths of a second, so 12.34 is read back as 12.3.
-        assert adapter_for("ShutterOpenDuration1").matches(12.34, 12.3)
+    def test_rounds_to_one_decimal(self):
+        # The device stores tenths of a second, so 32.26 rounds to 32.3.
+        assert adapter_for("ShutterOpenDuration1").matches(32.26, 32.3)
         assert adapter_for("ShutterCloseDuration1").matches("12", "12.0")
 
     def test_differs(self):
@@ -82,8 +82,8 @@ class TestShutterDurationAdapter:
     def test_non_numeric_falls_back(self):
         assert adapter_for("ShutterOpenDuration1").matches("nope", "nope")
 
-    def test_prepare_truncates_to_one_decimal(self):
-        assert adapter_for("ShutterCloseDuration1").prepare("12.345") == "12.3"
+    def test_prepare_rounds_to_one_decimal(self):
+        assert adapter_for("ShutterCloseDuration1").prepare("32.26") == "32.3"
 
 
 class TestShutterButtonAdapter:

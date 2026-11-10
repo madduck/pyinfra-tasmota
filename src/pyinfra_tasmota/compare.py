@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import re
-from decimal import ROUND_DOWN, Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from .connector import _canonical, _normalize, is_secret
@@ -112,26 +112,27 @@ class _Approximate(Adapter):
 
 
 class _Decimal(Adapter):
-    """Compare numbers truncated to a number of decimal places.
+    """Compare numbers rounded to a number of decimal places.
 
     Tasmota stores the shutter durations as tenths of a second, so it keeps
-    only one decimal place.
+    only one decimal place. The device floors when it stores a value, so the
+    desired value is rounded here; the sent value follows the rounded form.
     """
 
     def __init__(self, decimals: int) -> None:
         self._quantum = Decimal(1).scaleb(-decimals)
 
-    def _truncate(self, value: Any) -> str:
+    def _round(self, value: Any) -> str:
         try:
-            return str(Decimal(str(value)).quantize(self._quantum, rounding=ROUND_DOWN))
+            return str(Decimal(str(value)).quantize(self._quantum, rounding=ROUND_HALF_UP))
         except InvalidOperation:
             return _normalize(value)
 
     def matches(self, desired: Any, observed: Any) -> bool:
-        return self._truncate(desired) == self._truncate(observed)
+        return self._round(desired) == self._round(observed)
 
     def prepare(self, desired: Any) -> str:
-        return self._truncate(desired)
+        return self._round(desired)
 
 
 class _Prefix(Adapter):
