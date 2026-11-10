@@ -57,7 +57,7 @@ def cmnd(**kwargs: Any) -> Generator[PyinfraCommand, None, None]:
         if isinstance(value, (list, tuple)):
             changed = _queue_sequence(connector, subject, value) or changed
         else:
-            changed = _ensure(connector, subject, str(value)) or changed
+            changed = _ensure(connector, subject, value) or changed
 
     if changed:
         yield _marker()
@@ -74,8 +74,9 @@ def _queue_sequence(
     return bool(values)
 
 
-def _ensure(connector: TasmotaConnector, subject: str, desired: str) -> bool:
+def _ensure(connector: TasmotaConnector, subject: str, value: Any) -> bool:
     """Ensure one command, returning whether a change was recorded."""
+    desired = str(value)
     adapter = adapter_for(subject)
 
     if adapter.skip:
@@ -91,7 +92,7 @@ def _ensure(connector: TasmotaConnector, subject: str, desired: str) -> bool:
         observed = _read_current(connector, subject)
         connector.log_at(3, "%s: read %s as %s", connector.host.name, subject, observed)
 
-    if observed is not None and adapter.observed(observed) == adapter.desired(desired):
+    if observed is not None and adapter.matches(value, observed):
         if connector.executing:
             connector.log_at(
                 2, "%s: %s is already %s, skipping", connector.host.name, subject, observed
@@ -163,6 +164,10 @@ def _read_current(connector: TasmotaConnector, subject: str) -> Any:
         if _canonical(key) == target:
             connector.cache(key, value)
             return value
+
+    if adapter_for(subject).unwrapped:
+        connector.cache(subject, candidates)
+        return candidates
 
     if len(candidates) == 1:
         key, value = next(iter(candidates.items()))

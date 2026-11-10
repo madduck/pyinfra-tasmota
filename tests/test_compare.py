@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pyinfra_tasmota.compare import adapter_for
 
+ARCH_TEMPLATE = {"NAME": "x", "ARCH": "ESP8266", "GPIO": [0, 1], "FLAG": 0, "BASE": 18}
+
 
 class TestDefaultAdapter:
     def test_unknown_command_is_not_skipped(self):
@@ -11,10 +13,10 @@ class TestDefaultAdapter:
 
     def test_folds_booleans(self):
         adapter = adapter_for("SetOption114")
-        assert adapter.desired("1") == "1"
-        assert adapter.observed(1) == "1"
-        assert adapter.observed("ON") == "1"
-        assert adapter.observed("off") == "0"
+        assert adapter.matches(1, 1)
+        assert adapter.matches("on", "ON")
+        assert adapter.matches("off", 0)
+        assert not adapter.matches("on", "off")
 
     def test_matches_canonically(self):
         assert adapter_for("setoption114") is adapter_for("SetOption114")
@@ -23,55 +25,83 @@ class TestDefaultAdapter:
 
 class TestStructAdapter:
     def test_time_commands(self):
+        observed = {"Hemisphere": 0, "Week": 0, "Month": 3, "Day": 1, "Hour": 1, "Offset": 120}
         for name in ("TimeSTD", "TimeDST", "timestd", "timedst"):
-            adapter = adapter_for(name)
-            assert adapter.desired("0, 0, 3, 1, 1, 120") == "0,0,3,1,1,120"
-            observed = {
-                "Hemisphere": 0,
-                "Week": 0,
-                "Month": 3,
-                "Day": 1,
-                "Hour": 1,
-                "Offset": 120,
-            }
-            assert adapter.observed(observed) == "0,0,3,1,1,120"
+            assert adapter_for(name).matches("0, 0, 3, 1, 1, 120", observed)
+
+    def test_differs(self):
+        observed = {"Hemisphere": 0, "Week": 0, "Month": 3, "Day": 1, "Hour": 1, "Offset": 60}
+        assert not adapter_for("TimeDST").matches("0,0,3,1,1,120", observed)
 
     def test_scalar_fallback(self):
-        assert adapter_for("TimeDST").observed("1,2,3,4,5,6") == "1,2,3,4,5,6"
+        assert adapter_for("TimeDST").matches("1,2,3,4,5,6", "1,2,3,4,5,6")
 
 
 class TestFieldAdapter:
     def test_pulsetime_compares_set(self):
-        adapter = adapter_for("Pulsetime3")
-        assert adapter.observed({"Set": 10, "Remaining": 5}) == "10"
+        assert adapter_for("Pulsetime3").matches(10, {"Set": 10, "Remaining": 5})
+
+    def test_differs(self):
+        assert not adapter_for("Pulsetime3").matches(11, {"Set": 10, "Remaining": 5})
 
     def test_scalar_fallback(self):
-        assert adapter_for("Pulsetime3").observed(10) == "10"
+        assert adapter_for("Pulsetime3").matches(10, 10)
 
 
-class TestDecimalAdapter:
-    def test_truncates_desired(self):
-        assert adapter_for("Latitude").desired("51.5073509") == "51.507350"
+class TestApproximateAdapter:
+    def test_within_tolerance(self):
+        # The device stores micro-degrees with 32-bit float, so the value can
+        # come back a few units off.
+        assert adapter_for("Latitude").matches("65.389124", 65.389123)
+        assert adapter_for("Longitude").matches("-169.105553", -169.105576)
 
-    def test_truncates_observed(self):
-        assert adapter_for("Longitude").observed(51.5073509) == "51.507350"
+    def test_outside_tolerance(self):
+        assert not adapter_for("Longitude").matches("51.507350", 51.507500)
 
-    def test_negative_truncates_toward_zero(self):
-        assert adapter_for("Longitude").observed(-0.1234567) == "-0.123456"
-
-    def test_invalid_falls_back(self):
-        assert adapter_for("Latitude").observed("nope") == "nope"
+    def test_non_numeric_falls_back(self):
+        assert adapter_for("Latitude").matches("nope", "nope")
+        assert not adapter_for("Latitude").matches("nope", "other")
 
 
 class TestAliasAdapter:
     def test_fulltopic_default(self):
-        assert adapter_for("FullTopic").desired("1") == "%prefix%/%topic%/"
+        assert adapter_for("FullTopic").matches(1, "%prefix%/%topic%/")
 
     def test_fulltopic_user_value(self):
-        assert adapter_for("FullTopic").desired("tasmota/%topic%/") == "tasmota/%topic%/"
+        assert adapter_for("FullTopic").matches("tasmota/%topic%/", "tasmota/%topic%/")
 
-    def test_fulltopic_matches_canonically(self):
+    def test_matches_canonically(self):
         assert adapter_for("fulltopic") is adapter_for("FullTopic")
+
+
+class TestJsonAdapter:
+    def test_ignores_arch(self):
+        desired = {"NAME": "x", "GPIO": [0, 1], "FLAG": 0, "BASE": 18}
+        assert adapter_for("Template").matches(desired, ARCH_TEMPLATE)
+
+    def test_accepts_json_string(self):
+        desired = '{"NAME":"x","GPIO":[0,1],"FLAG":0,"BASE":18}'
+        assert adapter_for("Template").matches(desired, ARCH_TEMPLATE)
+
+    def test_key_order_does_not_matter(self):
+        desired = {"BASE": 18, "FLAG": 0, "GPIO": [0, 1], "NAME": "x"}
+        assert adapter_for("Template").matches(desired, ARCH_TEMPLATE)
+
+    def test_differs(self):
+        desired = {"NAME": "y", "GPIO": [0, 1], "FLAG": 0, "BASE": 18}
+        assert not adapter_for("Template").matches(desired, ARCH_TEMPLATE)
+
+    def test_list_value(self):
+        assert adapter_for("Template").matches("[1, 2]", [1, 2])
+
+    def test_invalid_json_falls_back(self):
+        assert adapter_for("Template").matches("not json", "not json")
+
+    def test_template_is_unwrapped(self):
+        assert adapter_for("Template").unwrapped is True
+
+    def test_other_commands_are_wrapped(self):
+        assert adapter_for("SetOption114").unwrapped is False
 
 
 class TestSkipAdapter:

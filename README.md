@@ -61,8 +61,11 @@ through an adapter:
 - `TimeSTD` and `TimeDST` take a comma-separated list but answer with a
   struct, which is flattened for the comparison.
 - `Pulsetime<x>` compares only its `Set` field.
-- `Latitude` and `Longitude` are compared truncated to 6 decimal places, as
-  the device stores them.
+- `Latitude` and `Longitude` are compared with a small tolerance, because the
+  device stores them as micro-degrees using 32-bit float, which loses the last
+  digit.
+- `Template` is compared as JSON, ignoring its `ARCH` field, which the device
+  adds but the desired value does not carry.
 - `Password1`, `Password2`, and `MqttPassword` answer with `***`, so their
   diff is skipped and they are always sent.
 - `FullTopic 1` selects the firmware default, `%prefix%/%topic%/`, which is

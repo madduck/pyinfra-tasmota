@@ -256,9 +256,29 @@ class TestAdapters:
         )
         assert list(cmnd._inner(Pulsetime3=10)) == []
 
-    def test_latitude_truncates(self, use_connector, status0):
-        use_connector({"Status 0": status0, "Status 13": [], "Latitude": {"Latitude": 51.507350}})
-        assert list(cmnd._inner(Latitude="51.5073509")) == []
+    def test_latitude_within_tolerance(self, use_connector, status0):
+        use_connector({"Status 0": status0, "Status 13": [], "Latitude": {"Latitude": 65.389123}})
+        assert list(cmnd._inner(Latitude="65.389124")) == []
+
+    def test_latitude_outside_tolerance_changes(self, use_connector, status0):
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": [], "Latitude": {"Latitude": 51.507300}}
+        )
+        assert len(list(cmnd._inner(Latitude="51.507350"))) == 1
+        assert list(connector._pending) == [("latitude", "51.507350")]
+
+    def test_template_ignores_arch(self, use_connector, status0):
+        # Template answers with the template object directly, including ARCH.
+        template = {"NAME": "x", "ARCH": "ESP8266", "GPIO": [0, 1], "FLAG": 0, "BASE": 18}
+        use_connector({"Status 0": status0, "Status 13": [], "Template": template})
+        desired = {"NAME": "x", "GPIO": [0, 1], "FLAG": 0, "BASE": 18}
+        assert list(cmnd._inner(Template=desired)) == []
+
+    def test_template_differs(self, use_connector, status0):
+        template = {"NAME": "x", "ARCH": "ESP8266", "GPIO": [0, 1], "FLAG": 0, "BASE": 18}
+        use_connector({"Status 0": status0, "Status 13": [], "Template": template})
+        desired = {"NAME": "y", "GPIO": [0, 1], "FLAG": 0, "BASE": 18}
+        assert len(list(cmnd._inner(Template=desired))) == 1
 
     def test_fulltopic_default_matches(self, use_connector, status0):
         use_connector(
