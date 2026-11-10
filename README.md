@@ -96,6 +96,9 @@ hosts = (
 The key holds a mapping of command name to a value or a list of values. The
 deploy ensures each command and then calls `apply`.
 
+Password commands are sent by default. Call `tasmota(send_passwords=False)` to
+leave `Password1`, `Password2`, and `MqttPassword` out of the run.
+
 ## Reboots
 
 Some commands reboot the device, for example `Restart`, `Module`, and

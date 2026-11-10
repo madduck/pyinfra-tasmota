@@ -32,3 +32,15 @@ class TestTasmotaDeploy:
         self._patch(monkeypatch, {"tasmota": [1, 2]})
         with pytest.raises(TypeError):
             deploy_module.tasmota._inner()
+
+    def test_send_passwords_defaults_true(self, monkeypatch):
+        commands = {"Password1": "a", "Password2": "b", "MqttPassword": "c", "Module": 1}
+        calls = self._patch(monkeypatch, {"tasmota": commands})
+        deploy_module.tasmota._inner()
+        assert calls == [("cmnd", commands), ("apply", None)]
+
+    def test_send_passwords_false_drops_passwords(self, monkeypatch):
+        commands = {"Password1": "a", "Password2": "b", "MqttPassword": "c", "Module": 1}
+        calls = self._patch(monkeypatch, {"tasmota": commands})
+        deploy_module.tasmota._inner(send_passwords=False)
+        assert calls == [("cmnd", {"Module": 1}), ("apply", None)]
