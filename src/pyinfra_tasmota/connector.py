@@ -303,6 +303,16 @@ class TasmotaConnector(BaseConnector):
         """Send ``cmnd`` to the device and return the parsed JSON reply."""
         return self._request(cmnd, allow_missing=allow_missing)
 
+    def send_command(self, subject: str, value: Any) -> None:
+        """Send a single command directly, outside the backlog.
+
+        Values containing semicolons, such as rule text, cannot go into a
+        backlog, because the semicolon separates backlog commands.
+        """
+        self._request(f"{subject} {value}")
+        self.log_at(1, "%s: sent %s %s", self.host.name, subject, redact(subject, value))
+        self.cache(subject, value)
+
     # -- Flushing -------------------------------------------------------------
 
     def apply(self) -> None:

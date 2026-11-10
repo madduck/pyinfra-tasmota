@@ -134,6 +134,24 @@ the interlock), then `ShutterMode`, `ShutterRelay<x>`, `ShutterButton<x>`
 are skipped, and the device is only restarted when shutter support has to be
 enabled.
 
+## Rules
+
+Rule text contains semicolons, which separate `Backlog` commands, so it
+cannot be sent in a batch. The `rule` operation sends the text as its own
+request and the flags as ordinary commands:
+
+```py
+from pyinfra_tasmota.operations import apply, rule
+
+rule("ON clock#Timer=1 DO Power1 ON ENDON", enabled=True, once=False)
+apply()
+```
+
+`index` selects the rule set and defaults to `1`. `enabled`, `once`, and
+`stop_on_error` set the matching flag when given, and `append` adds to the set
+instead of replacing it. The text already has semicolons, so the operation
+never puts it in a backlog.
+
 ## Verbosity
 
 The connector follows pyinfra's `-v` flags:

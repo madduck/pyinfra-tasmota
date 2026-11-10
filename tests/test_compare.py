@@ -5,6 +5,13 @@ from __future__ import annotations
 from pyinfra_tasmota.compare import adapter_for
 
 ARCH_TEMPLATE = {"NAME": "x", "ARCH": "ESP8266", "GPIO": [0, 1], "FLAG": 0, "BASE": 18}
+INTERLOCK_OBSERVED = {"Interlock": "ON", "Groups": "1,2"}
+RULE_OBSERVED = {
+    "State": "ON",
+    "Once": "OFF",
+    "StopOnError": "OFF",
+    "Rules": "on x do y endon",
+}
 
 
 class TestDefaultAdapter:
@@ -106,11 +113,53 @@ class TestJsonAdapter:
     def test_invalid_json_falls_back(self):
         assert adapter_for("Template").matches("not json", "not json")
 
-    def test_template_is_unwrapped(self):
-        assert adapter_for("Template").unwrapped is True
+    def test_template_uses_whole_response(self):
+        assert adapter_for("Template").whole is True
 
-    def test_other_commands_are_wrapped(self):
-        assert adapter_for("SetOption114").unwrapped is False
+    def test_other_commands_use_the_command_key(self):
+        assert adapter_for("SetOption114").whole is False
+
+
+class TestInterlockAdapter:
+    def test_groups(self):
+        assert adapter_for("Interlock").matches("1,2", INTERLOCK_OBSERVED)
+
+    def test_enabled(self):
+        assert adapter_for("Interlock").matches("ON", INTERLOCK_OBSERVED)
+
+    def test_differs(self):
+        assert not adapter_for("Interlock").matches("OFF", INTERLOCK_OBSERVED)
+        assert not adapter_for("Interlock").matches("3,4", INTERLOCK_OBSERVED)
+
+    def test_scalar_fallback(self):
+        assert adapter_for("Interlock").matches("1,2", "1,2")
+
+    def test_uses_whole_response(self):
+        assert adapter_for("Interlock").whole is True
+
+
+class TestRuleAdapter:
+    def test_text(self):
+        assert adapter_for("Rule1").matches("ON x DO y ENDON", RULE_OBSERVED)
+        assert not adapter_for("Rule1").matches("ON z DO y ENDON", RULE_OBSERVED)
+
+    def test_enabled_flag(self):
+        assert adapter_for("Rule1").matches("1", RULE_OBSERVED)
+        assert not adapter_for("Rule1").matches("0", RULE_OBSERVED)
+
+    def test_once_flag(self):
+        assert not adapter_for("Rule1").matches("5", RULE_OBSERVED)
+        assert adapter_for("Rule1").matches("4", RULE_OBSERVED)
+
+    def test_stop_on_error_flag(self):
+        assert not adapter_for("Rule1").matches("9", RULE_OBSERVED)
+        assert adapter_for("Rule1").matches("8", RULE_OBSERVED)
+
+    def test_scalar_fallback(self):
+        assert adapter_for("Rule1").matches("text", "text")
+
+    def test_uses_command_key(self):
+        assert adapter_for("Rule1").whole is False
 
 
 class TestSkipAdapter:

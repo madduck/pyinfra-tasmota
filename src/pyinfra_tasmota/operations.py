@@ -125,12 +125,16 @@ def shutter(
     to_send = [
         subject for subject, value in settings.items() if _needs_change(connector, subject, value)
     ]
+    interlock_changed = _needs_change(connector, "Interlock", interlock) or _needs_change(
+        connector, "Interlock", "ON"
+    )
     enabled = connector.shutter_enabled()
-    if enabled and not to_send:
+    if enabled and not to_send and not interlock_changed:
         return
 
     # The interlock must be set before the shutter mode that requires it.
-    _queue_sequence(connector, "Interlock", [interlock, "ON"])
+    _ensure(connector, "Interlock", interlock)
+    _ensure(connector, "Interlock", "ON")
     for subject in to_send:
         connector.record(subject, str(settings[subject]))
 
@@ -138,6 +142,65 @@ def shutter(
         yield _enable_shutter()
     else:
         yield _marker()
+
+
+@operation()
+def rule(
+    code: str,
+    *,
+    index: int = 1,
+    enabled: bool | None = None,
+    once: bool | None = None,
+    stop_on_error: bool | None = None,
+    append: bool = False,
+) -> Generator[PyinfraCommand, None, None]:
+    """Set a Tasmota rule set.
+
+    Rule text contains semicolons, which separate backlog commands, so it is
+    sent as its own request rather than through the batch flush. The flags are
+    sent afterwards as ordinary commands.
+
+    Args:
+        code: The rule text, for example ``"ON ... DO ... ENDON"``.
+        index: Rule set number, default ``1``.
+        enabled: Enable or disable the set (``Rule<x> 1`` or ``0``).
+        once: Whether the set runs once (``Rule<x> 5`` or ``4``).
+        stop_on_error: Whether to stop on error (``Rule<x> 9`` or ``8``).
+        append: Append the code instead of replacing the set.
+
+    Yields:
+        At most one command.
+    """
+    connector = _connector()
+    subject = f"Rule{index}"
+    code_value = f"+{code}" if append else code
+
+    send_code = append or _needs_change(connector, subject, code_value)
+
+    changed = False
+    if enabled is not None:
+        changed = _ensure(connector, subject, "1" if enabled else "0") or changed
+    if once is not None:
+        changed = _ensure(connector, subject, "5" if once else "4") or changed
+    if stop_on_error is not None:
+        changed = _ensure(connector, subject, "9" if stop_on_error else "8") or changed
+
+    if send_code:
+        yield _send_rule(subject, code_value)
+    elif changed:
+        yield _marker()
+
+
+def _send_rule(subject: str, value: str) -> PyinfraCommand:
+    """Return a command that sends rule text directly, outside the backlog."""
+
+    def send(state: Any, host: Any) -> bool:
+        connector = host.connector
+        assert isinstance(connector, TasmotaConnector)
+        connector.send_command(subject, value)
+        return True
+
+    return FunctionCommand(send, (), {})
 
 
 def _ensure_all(connector: TasmotaConnector, commands: Mapping[str, Any]) -> bool:
@@ -265,15 +328,17 @@ def _read_current(connector: TasmotaConnector, subject: str) -> Any:
     if not candidates:
         return None
 
+    # Commands like Interlock answer with several top-level fields, so the
+    # adapter needs the whole response, not the value under the command's key.
+    if adapter_for(subject).whole:
+        connector.cache(subject, candidates)
+        return candidates
+
     target = _canonical(subject)
     for key, value in candidates.items():
         if _canonical(key) == target:
             connector.cache(key, value)
             return value
-
-    if adapter_for(subject).unwrapped:
-        connector.cache(subject, candidates)
-        return candidates
 
     if len(candidates) == 1:
         key, value = next(iter(candidates.items()))

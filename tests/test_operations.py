@@ -7,7 +7,7 @@ import logging
 import pytest
 
 from pyinfra_tasmota import operations
-from pyinfra_tasmota.operations import apply, cmnd, ensure_host_data, shutter
+from pyinfra_tasmota.operations import apply, cmnd, ensure_host_data, rule, shutter
 from tests.conftest import CatchAll, make_state
 
 
@@ -342,6 +342,7 @@ class TestAdapters:
 
 SHUTTER_RESPONSES = {
     "SetOption80": {"SetOption80": "ON"},
+    "Interlock": {"Interlock": "ON", "Groups": "1,2"},
     "ShutterMode": {"ShutterMode": 1},
     "ShutterRelay1": {"ShutterRelay1": 1},
     "ShutterOpenDuration1": {"ShutterOpenDuration1": 12.0},
@@ -355,12 +356,15 @@ class TestShutterOperation:
         assert list(shutter._inner(open_duration=12, close_duration=12)) == []
 
     def test_change_records_interlock_first(self, use_connector, status0):
-        connector = use_connector({"Status 0": status0, "Status 13": [], **SHUTTER_RESPONSES})
+        responses = {
+            **SHUTTER_RESPONSES,
+            "Interlock": {"Interlock": "ON", "Groups": "3,4"},
+        }
+        connector = use_connector({"Status 0": status0, "Status 13": [], **responses})
         commands = list(shutter._inner(open_duration=12, close_duration=12, mode=2))
         assert len(commands) == 1
         assert list(connector._pending) == [
             ("interlock", "1,2"),
-            ("interlock", "ON"),
             ("shuttermode", "2"),
         ]
 
@@ -393,6 +397,71 @@ class TestShutterOperation:
         command = next(iter(shutter._inner(open_duration=12, close_duration=12)))
         assert command.execute(None, FakeHost(connector), {}) is True
         assert connector.shutter_enabled() is True
+
+
+RULE_RESPONSE = {"Rule1": {"State": "OFF", "Once": "OFF", "StopOnError": "OFF", "Rules": ""}}
+
+
+class TestRuleOperation:
+    def test_sends_code_directly(self, use_connector, status0):
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 13":
+                return {}
+            if cmnd == "Rule1":
+                return RULE_RESPONSE
+            return {}
+
+        connector = use_connector(handler)
+        command = next(iter(rule._inner("ON x DO y ENDON")))
+        assert command.execute(None, FakeHost(connector), {}) is True
+        assert any("Rule1+ON+x+DO+y+ENDON" in url for url in connector.session.requests)
+
+    def test_no_change_yields_nothing(self, use_connector, status0):
+        responses = {
+            "Status 0": status0,
+            "Status 13": [],
+            "Rule1": {"Rule1": {"State": "ON", "Rules": "on x do y endon"}},
+        }
+        use_connector(responses)
+        assert list(rule._inner("ON x DO y ENDON")) == []
+
+    def test_flags_are_recorded(self, use_connector, status0):
+        responses = {
+            "Status 0": status0,
+            "Status 13": [],
+            "Rule1": {"Rule1": {"State": "OFF", "Once": "OFF", "Rules": "on x do y endon"}},
+        }
+        connector = use_connector(responses)
+        commands = list(rule._inner("ON x DO y ENDON", enabled=True, once=True))
+        assert len(commands) == 1
+        assert list(connector._pending) == [("rule1", "1"), ("rule1", "5")]
+
+    def test_append_always_sends(self, use_connector, status0):
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 13":
+                return {}
+            if cmnd == "Rule1":
+                return {"Rule1": {"State": "ON", "Rules": "on x do y endon"}}
+            return {}
+
+        connector = use_connector(handler)
+        command = next(iter(rule._inner("ON z DO y ENDON", append=True)))
+        assert command.execute(None, FakeHost(connector), {}) is True
+        assert any("Rule1+%2BON+z+DO+y+ENDON" in url for url in connector.session.requests)
+
+    def test_stop_on_error_flag(self, use_connector, status0):
+        responses = {
+            "Status 0": status0,
+            "Status 13": [],
+            "Rule1": {"Rule1": {"State": "OFF", "StopOnError": "OFF", "Rules": ""}},
+        }
+        connector = use_connector(responses)
+        list(rule._inner("ON x DO y ENDON", stop_on_error=True))
+        assert ("rule1", "9") in connector._pending
 
 
 class TestApply:

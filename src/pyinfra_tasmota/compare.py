@@ -30,9 +30,9 @@ class Adapter:
     """Decides whether an observed value already reaches a desired one."""
 
     skip: bool = False
-    # True when a command answers with the value itself rather than an object
-    # keyed by the command name, as Template does.
-    unwrapped: bool = False
+    # True when the comparison needs the whole response object rather than the
+    # value under the command's key, as Template and Interlock do.
+    whole: bool = False
 
     def matches(self, desired: Any, observed: Any) -> bool:
         """Return whether ``observed`` already reaches ``desired``."""
@@ -97,9 +97,9 @@ class _Alias(Adapter):
 class _Json(Adapter):
     """Compare JSON values, ignoring listed keys."""
 
-    def __init__(self, ignore: tuple[str, ...] = (), unwrapped: bool = False) -> None:
+    def __init__(self, ignore: tuple[str, ...] = (), whole: bool = False) -> None:
         self._ignore = frozenset(ignore)
-        self.unwrapped = unwrapped
+        self.whole = whole
 
     def _canonical(self, value: Any) -> str:
         data = value if isinstance(value, (dict, list)) else json.loads(str(value))
@@ -114,9 +114,58 @@ class _Json(Adapter):
             return _normalize(observed) == _normalize(desired)
 
 
+class _Interlock(Adapter):
+    """Compare an interlock group list or its enabled state.
+
+    ``Interlock`` answers with both at the top level, e.g.
+    ``{"Interlock":"ON","Groups":"1,2"}``. A boolean desired value compares
+    with the enabled state, anything else with the group list.
+    """
+
+    whole = True
+
+    def matches(self, desired: Any, observed: Any) -> bool:
+        if not isinstance(observed, dict):
+            return _normalize(observed) == _normalize(desired)
+        wanted = _normalize(desired)
+        field = "Interlock" if wanted in ("0", "1") else "Groups"
+        return _normalize(observed.get(field)) == wanted
+
+
+# Rule flags map ``Rule<x>`` payloads to the response field they change.
+_RULE_FLAGS = {
+    "0": ("State", "0"),
+    "1": ("State", "1"),
+    "4": ("Once", "0"),
+    "5": ("Once", "1"),
+    "8": ("StopOnError", "0"),
+    "9": ("StopOnError", "1"),
+}
+
+
+class _Rule(Adapter):
+    """Compare a rule set's text or one of its flags.
+
+    ``Rule<x>`` answers with ``State`` (enabled), ``Once``, ``StopOnError`` and
+    ``Rules`` (the text). The desired value is a flag (``0``/``1`` enable,
+    ``4``/``5`` once, ``8``/``9`` stop-on-error) or the rule text.
+    """
+
+    def matches(self, desired: Any, observed: Any) -> bool:
+        if not isinstance(observed, dict):
+            return _normalize(observed) == _normalize(desired)
+        wanted = _normalize(desired)
+        flag = _RULE_FLAGS.get(wanted)
+        if flag is not None:
+            field, expected = flag
+            return _normalize(observed.get(field)) == expected
+        return _normalize(observed.get("Rules")) == wanted
+
+
 _DEFAULT = Adapter()
 _PULSETIME = _Field("Set")
 _MASKED = _Skip()
+_RULE = _Rule()
 
 _ADAPTERS: dict[str, Adapter] = {
     "timestd": _Struct(_TIME_FIELDS),
@@ -125,7 +174,8 @@ _ADAPTERS: dict[str, Adapter] = {
     "longitude": _Approximate(_COORDINATE_TOLERANCE),
     "mqttpassword": _MASKED,
     "fulltopic": _Alias({"1": _MQTT_FULLTOPIC}),
-    "template": _Json(ignore=("ARCH",), unwrapped=True),
+    "template": _Json(ignore=("ARCH",), whole=True),
+    "interlock": _Interlock(),
 }
 
 # Shutter travel durations are stored as tenths of a second and read back as
@@ -134,6 +184,7 @@ _SHUTTER_DURATION = _Approximate(0.05)
 _SHUTTER_DURATION_PATTERN = re.compile(r"shutter(?:open|close)duration\d+$")
 
 _PULSETIME_PATTERN = re.compile(r"pulsetime\d+$")
+_RULE_PATTERN = re.compile(r"rule\d+$")
 
 
 def adapter_for(command: str) -> Adapter:
@@ -150,6 +201,8 @@ def adapter_for(command: str) -> Adapter:
         return _PULSETIME
     if _SHUTTER_DURATION_PATTERN.fullmatch(canonical):
         return _SHUTTER_DURATION
+    if _RULE_PATTERN.fullmatch(canonical):
+        return _RULE
     if is_secret(command):
         return _MASKED
     return _DEFAULT
