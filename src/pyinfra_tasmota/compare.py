@@ -57,6 +57,15 @@ class Adapter:
         """
         return observed
 
+    def prepare(self, desired: Any) -> Any:
+        """Return the value to record and send for ``desired``.
+
+        Most commands send the value as given. Commands whose device keeps
+        less precision override this, so the sent value matches the one the
+        comparison uses.
+        """
+        return desired
+
 
 class _Skip(Adapter):
     """A command whose observed value is masked, so it cannot be diffed."""
@@ -120,6 +129,9 @@ class _Decimal(Adapter):
 
     def matches(self, desired: Any, observed: Any) -> bool:
         return self._truncate(desired) == self._truncate(observed)
+
+    def prepare(self, desired: Any) -> str:
+        return self._truncate(desired)
 
 
 class _Prefix(Adapter):

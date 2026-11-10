@@ -221,6 +221,11 @@ class TestCmnd:
         assert len(list(cmnd._inner(Power=["off", "on"]))) == 1
         assert list(connector._pending) == [("power", "on")]
 
+    def test_duration_is_prepared(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        assert len(list(cmnd._inner(ShutterCloseDuration1=12.345))) == 1
+        assert list(connector._pending) == [("shuttercloseduration1", "12.3")]
+
     def test_tuple_value_is_treated_as_a_list(self, use_connector, status0):
         connector = use_connector({"Status 0": status0, "Status 13": []})
         assert len(list(cmnd._inner(Rule1=("ON", "1")))) == 1
@@ -427,6 +432,11 @@ class TestShutterOperation:
             ("interlock", "1,2"),
             ("shuttermode", "2"),
         ]
+
+    def test_duration_is_sent_truncated(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": [], **SHUTTER_RESPONSES})
+        list(shutter._inner(open_duration=12.345, close_duration=12))
+        assert ("shutteropenduration1", "12.3") in connector._pending
 
     def test_button_is_included_when_given(self, use_connector, status0):
         connector = use_connector({"Status 0": status0, "Status 13": [], **SHUTTER_RESPONSES})

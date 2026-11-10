@@ -120,8 +120,10 @@ def shutter(
     to return before the remaining settings are sent.
 
     Args:
-        open_duration: Seconds to open fully (``ShutterOpenDuration``).
-        close_duration: Seconds to close fully (``ShutterCloseDuration``).
+        open_duration: Seconds to open fully, truncated to one decimal
+            (``ShutterOpenDuration``).
+        close_duration: Seconds to close fully, truncated to one decimal
+            (``ShutterCloseDuration``).
         interlock: Relay pair to interlock, sent first (``Interlock``).
         mode: Shutter mode (``ShutterMode``), default ``1``.
         relay: First relay of the pair (``ShutterRelay``), default ``1``.
@@ -155,7 +157,7 @@ def shutter(
     _ensure(connector, "Interlock", interlock)
     _ensure(connector, "Interlock", "ON")
     for subject in to_send:
-        connector.record(subject, str(settings[subject]))
+        connector.record(subject, str(adapter_for(subject).prepare(settings[subject])))
 
     if not enabled:
         yield _enable_shutter()
@@ -297,8 +299,8 @@ def _ensure_any(connector: TasmotaConnector, subject: str, value: Any) -> bool:
 
 def _needs_change(connector: TasmotaConnector, subject: str, value: Any) -> bool:
     """Return whether a command must be sent, reading the device if needed."""
-    desired = str(value)
     adapter = adapter_for(subject)
+    desired = str(adapter.prepare(value))
     described = adapter.describe(value)
     label = f"{subject} {described}" if described else subject
 
@@ -351,7 +353,7 @@ def _needs_change(connector: TasmotaConnector, subject: str, value: Any) -> bool
 def _ensure(connector: TasmotaConnector, subject: str, value: Any) -> bool:
     """Ensure one command, returning whether a change was recorded."""
     if _needs_change(connector, subject, value):
-        connector.record(subject, str(value))
+        connector.record(subject, str(adapter_for(subject).prepare(value)))
         return True
     return False
 

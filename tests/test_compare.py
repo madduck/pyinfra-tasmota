@@ -82,6 +82,9 @@ class TestShutterDurationAdapter:
     def test_non_numeric_falls_back(self):
         assert adapter_for("ShutterOpenDuration1").matches("nope", "nope")
 
+    def test_prepare_truncates_to_one_decimal(self):
+        assert adapter_for("ShutterCloseDuration1").prepare("12.345") == "12.3"
+
 
 class TestShutterButtonAdapter:
     def test_prefix_matches(self):
@@ -200,6 +203,7 @@ class TestRuleAdapter:
         adapter = adapter_for("Power")
         assert adapter.describe("ON") == ""
         assert adapter.observed("ON", "OFF") == "OFF"
+        assert adapter.prepare("ON") == "ON"
 
 
 class TestSkipAdapter:

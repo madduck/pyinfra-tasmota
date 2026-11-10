@@ -142,7 +142,8 @@ the interlock), then `ShutterMode`, `ShutterRelay<x>`, `ShutterButton<x>`
 (when given), `ShutterOpenDuration<x>`, and `ShutterCloseDuration<x>`.
 `index` selects the shutter and defaults to `1`. Settings that already match
 are skipped, and the device is only restarted when shutter support has to be
-enabled.
+enabled. Tasmota stores the travel durations as tenths of a second, so the
+durations are truncated to one decimal place before they are sent.
 
 ## Rules
 
