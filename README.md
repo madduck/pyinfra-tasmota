@@ -101,6 +101,10 @@ commands, and waits for the device to answer again before continuing. A
 device is considered back once it was seen to drop and is answering, or once
 its `BootCount` has advanced.
 
+Reboot-triggering settings are still read and diffed like any other command.
+Only commands whose bare form acts on the device or reports no value, such as
+`Backlog` or `Restart`, are sent without a read.
+
 If the device does not return within the timeout, `apply` reports an error.
 
 ## Verbosity

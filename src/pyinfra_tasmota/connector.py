@@ -44,18 +44,18 @@ _FALSE_VALUES = frozenset({"0", "off", "false", "no"})
 DEFAULT_REBOOT_TIMEOUT = 60.0
 REBOOT_POLL_INTERVAL = 0.5
 
-# A handful of Tasmota commands restart the device (or its networking stack).
-# The connector cannot apply further commands until the device is back, so
-# these are isolated into their own batch and applied last.
+# Tasmota commands that restart the device (or its networking stack) when
+# set. Their writes are isolated into their own batch, applied last, and
+# awaited. Most of them are safe to read, so they are not in NO_READ_COMMANDS.
 REBOOT_COMMANDS = frozenset(
     {
         "ap",
         "devgroupname",
+        "fulltopic",
         "hostname",
         "ipaddress",
         "module",
         "mqttclient",
-        "mqttfulltopic",
         "mqtthost",
         "mqttpassword",
         "mqttport",
@@ -66,6 +66,23 @@ REBOOT_COMMANDS = frozenset(
         "ssid",
         "sta",
         "template",
+        "upgrade",
+        "upload",
+    }
+)
+
+# Tasmota commands whose bare form acts on the device or has no value to
+# compare, so they are never read to check for a diff; a requested value is
+# always sent. Most commands can be read safely.
+NO_READ_COMMANDS = frozenset(
+    {
+        "backlog",
+        "backlog0",
+        "backlog2",
+        "backlog3",
+        "delay",
+        "reset",
+        "restart",
         "upgrade",
         "upload",
     }

@@ -93,6 +93,13 @@ class TestCmnd:
         assert len(connector.session.requests) == before
         assert connector._pending == {("restart", "1"): "Restart"}
 
+    def test_action_command_is_not_read(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        before = len(connector.session.requests)
+        assert len(list(cmnd._inner(Backlog="Power1 on"))) == 1
+        assert len(connector.session.requests) == before
+        assert connector._pending == {("backlog", "Power1 on"): "Backlog"}
+
     def test_records_desired_value_and_yields_marker(self, use_connector, status0):
         connector = use_connector({"Status 0": status0, "Status 13": []})
         command = next(iter(cmnd._inner(SetOption114=1)))

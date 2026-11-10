@@ -13,6 +13,8 @@ from pyinfra_tasmota.connector import (
     BACKLOG_MAX_COMMANDS,
     BACKLOG_MAX_LENGTH,
     BACKLOG_PREFIX,
+    NO_READ_COMMANDS,
+    REBOOT_COMMANDS,
     TasmotaConnector,
     _backlog_batches,
     _canonical,
@@ -83,6 +85,21 @@ class TestNormalize:
     def test_other_values(self):
         assert _normalize("3") == "3"
         assert _normalize("  Tokens ") == "tokens"
+
+
+class TestCommandSets:
+    def test_fulltopic_reboots_but_is_readable(self):
+        # FullTopic restarts the device on change, but is safe to read, so its
+        # value can be diffed.
+        assert "fulltopic" in REBOOT_COMMANDS
+        assert "fulltopic" not in NO_READ_COMMANDS
+
+    def test_mqttfulltopic_is_not_a_command(self):
+        assert "mqttfulltopic" not in REBOOT_COMMANDS
+
+    def test_action_commands_are_never_read(self):
+        for command in ("backlog", "backlog0", "delay", "restart", "reset"):
+            assert command in NO_READ_COMMANDS
 
 
 class TestBacklogBatches:

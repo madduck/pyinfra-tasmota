@@ -11,7 +11,7 @@ from pyinfra.api.operation import operation
 from pyinfra.context import host
 
 from .compare import adapter_for
-from .connector import REBOOT_COMMANDS, TasmotaConnector, _canonical
+from .connector import NO_READ_COMMANDS, TasmotaConnector, _canonical
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -38,8 +38,9 @@ def cmnd(**kwargs: Any) -> Generator[PyinfraCommand, None, None]:
     happens while the command generator runs, so changes are visible during
     the prepare step and to ``--dry``.
 
-    Reboot-triggering commands are never read: sending such a command to learn
-    its value is meaningless and may act on the device.
+    Commands whose bare form acts on the device or reports no value, such as
+    ``Backlog`` or ``Restart``, are never read: a requested value is always
+    sent. Most commands, including reboot-triggering settings, are read.
 
     The recorded commands are sent by the ``apply`` operation, or on
     disconnect.
@@ -86,7 +87,7 @@ def _ensure(connector: TasmotaConnector, subject: str, desired: str) -> bool:
         return True
 
     observed = connector.raw(subject)
-    if observed is None and _canonical(subject) not in REBOOT_COMMANDS:
+    if observed is None and _canonical(subject) not in NO_READ_COMMANDS:
         observed = _read_current(connector, subject)
         connector.log_at(3, "%s: read %s as %s", connector.host.name, subject, observed)
 
