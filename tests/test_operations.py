@@ -39,9 +39,7 @@ class TestEnsureHostData:
         assert list(connector._pending) == [("setoption114", "1")]
 
     @pytest.mark.parametrize("module", [0, "0", "OFF"])
-    def test_leaves_template_and_module_selection_to_the_template_operation(
-        self, use_connector, status0, module
-    ):
+    def test_activates_template_after_other_commands(self, use_connector, status0, module):
         connector = use_connector(
             {"Status 0": status0, "Status 13": []},
             data={
@@ -49,7 +47,66 @@ class TestEnsureHostData:
             },
         )
         assert len(list(ensure_host_data._inner())) == 1
-        assert list(connector._pending) == [("setoption114", "1")]
+        assert list(connector._pending) == [
+            ("setoption114", "1"),
+            ("template", '{"NAME":"x"}'),
+            ("module", "0"),
+        ]
+
+    @pytest.mark.parametrize("subject", ["Template", "template", "TEMPLATE"])
+    @pytest.mark.parametrize("as_json", [False, True])
+    def test_template_commands_with_custom_key(self, use_connector, status0, subject, as_json):
+        desired = {"NAME": "x", "CMND": "Backlog SetOption114 1|Power ON"}
+        value = json.dumps(desired) if as_json else desired
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": []},
+            data={"other": {subject: value}},
+        )
+        assert len(list(ensure_host_data._inner(key="other"))) == 1
+        assert list(connector._pending) == [
+            ("template", '{"NAME":"x"}'),
+            ("module", "0"),
+            ("setoption114", "1"),
+            ("power", "ON"),
+        ]
+        assert desired["CMND"] == "Backlog SetOption114 1|Power ON"
+
+    def test_matching_template_yields_nothing(self, use_connector, status0):
+        status0["Status"]["Module"] = 0
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": [], "Template": {"NAME": "x"}},
+            data={"tasmota": {"Template": {"NAME": "x", "CMND": "SetOption114 0"}}},
+        )
+        assert list(ensure_host_data._inner()) == []
+        assert not connector.has_pending()
+
+    def test_matching_template_still_activates(self, use_connector, status0):
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": [], "Template": {"NAME": "x"}},
+            data={"tasmota": {"Template": {"NAME": "x", "CMND": "SetOption114 1"}}},
+        )
+        assert len(list(ensure_host_data._inner())) == 1
+        assert list(connector._pending) == [("module", "0"), ("setoption114", "1")]
+
+    def test_uses_first_template_entry(self, use_connector, status0):
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": []},
+            data={"tasmota": {"Template": {"NAME": "x"}, "template": {"NAME": "y"}}},
+        )
+        assert len(list(ensure_host_data._inner())) == 1
+        assert list(connector._pending) == [("template", '{"NAME":"x"}'), ("module", "0")]
+
+    def test_template_and_rule(self, use_connector, status0):
+        connector = use_connector(
+            {"Status 0": status0, "Status 13": [], "Rule1": {"Rule1": {"Rules": ""}}},
+            data={"tasmota": {"Template": {"NAME": "x"}, "Rule1": "ON x DO y ENDON"}},
+        )
+        commands = list(ensure_host_data._inner())
+        assert len(commands) == 1
+        connector.session.responses = CatchAll()
+        assert commands[0].execute(None, FakeHost(connector), {}) is True
+        assert "Rule1+ON+x+DO+y+ENDON" in connector.session.requests[-1]
+        assert list(connector._pending) == [("template", '{"NAME":"x"}'), ("module", "0")]
 
     def test_no_data_yields_nothing(self, use_connector, status0):
         use_connector({"Status 0": status0, "Status 13": []})

@@ -110,10 +110,20 @@ payloads (`Rule1: [code, "1"]`), or a mapping with `code` and the flags
 (`enabled`, `once`, `stop_on_error`, `append`). Their text is sent directly,
 because it can contain semicolons.
 
-A `Template` key is handled like the `template` operation with
-`activate=True` rather than as an ordinary command. The deploy stores the
-template and then selects it with `Module 0`. A `Module 0` entry in the
-mapping is dropped, because the `template` operation sets it.
+`ensure_host_data` handles a `Template` key like the `template` operation
+with `activate=True`, after the other commands. It stores the template,
+selects it with `Module 0`, and ensures its `CMND` commands. A separate
+`Module 0` entry is skipped.
+
+This also works when you call `ensure_host_data` directly, with either the
+default `tasmota` key or a custom host-data key:
+
+```py
+from pyinfra_tasmota.operations import apply, ensure_host_data
+
+ensure_host_data(key="device_settings")
+apply()
+```
 
 Password commands are sent by default. Call `tasmota(send_passwords=False)` to
 leave `Password1`, `Password2`, and `MqttPassword` out of the run.

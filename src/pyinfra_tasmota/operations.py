@@ -84,9 +84,16 @@ def template(
     Yields:
         At most one marker command when any value must change.
     """
+    if _ensure_template(_connector(), value, activate=activate):
+        yield _marker()
+
+
+def _ensure_template(
+    connector: TasmotaConnector, value: str | dict[str, Any], *, activate: bool = True
+) -> bool:
+    """Ensure a template and its activation commands, returning whether values changed."""
     data = json.loads(value) if isinstance(value, str) else dict(value)
     commands = data.pop("CMND", "")
-    connector = _connector()
     changed = _ensure(connector, "Template", json.dumps(data, separators=(",", ":")))
     if activate:
         changed = _ensure(connector, "Module", 0) or changed
@@ -98,8 +105,7 @@ def template(
             subject = parts[0]
             payload = parts[1].strip() if len(parts) > 1 else ""
             changed = _ensure(connector, subject, payload) or changed
-    if changed:
-        yield _marker()
+    return changed
 
 
 @operation()
@@ -117,8 +123,9 @@ def ensure_host_data(
     rule text, or a mapping of its arguments. Their text is sent directly,
     because it can contain semicolons.
 
-    ``Template`` and the ``Module 0`` that selects it are left to the
-    ``template`` operation, so they are not sent as ordinary commands.
+    A ``Template`` entry is handled like the ``template`` operation with
+    ``activate=True``, after the other commands. It ensures ``Module 0`` and
+    the template's ``CMND`` commands. A separate ``Module 0`` entry is skipped.
 
     Args:
         key: The host-data key holding a mapping of command to value.
@@ -147,6 +154,10 @@ def ensure_host_data(
             changed = rule_changed or changed
         else:
             changed = _ensure_any(connector, subject, value) or changed
+
+    value = _template_value(commands)
+    if value is not None:
+        changed = _ensure_template(connector, value) or changed
 
     for subject, value in rule_sends:
         yield _send_rule(subject, value)
@@ -291,12 +302,19 @@ def _ensure_rule(
     return send_code, changed
 
 
-def _is_template_activation(subject: str, value: Any) -> bool:
-    """Return whether a command is owned by the ``template`` operation.
+def _template_value(commands: Mapping[str, Any]) -> Any | None:
+    """Return the ``Template`` value from a host-data mapping, or ``None``."""
+    for subject, value in commands.items():
+        if _canonical(subject) == "template":
+            return value
+    return None
 
-    ``Template`` stores a template and ``Module 0`` selects it, so the
-    ``template`` operation handles both. ``ensure_host_data`` leaves them out
-    rather than sending them as ordinary commands.
+
+def _is_template_activation(subject: str, value: Any) -> bool:
+    """Return whether a command belongs to template handling.
+
+    ``Template`` stores a template and ``Module 0`` selects it, so they are
+    handled together rather than sent as ordinary commands.
     """
     canonical = _canonical(subject)
     return canonical == "template" or (canonical == "module" and _normalize(value) == "0")
