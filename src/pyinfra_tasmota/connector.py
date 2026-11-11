@@ -347,7 +347,7 @@ class TasmotaConnector(BaseConnector):
             self._send_batch(batch)
 
         for subject, value in reboots:
-            self._send_reboot(subject, value)
+            self.send_reboot(subject, value)
 
     def _send_batch(self, batch: list[tuple[str, str]]) -> None:
         """Send a batch of non-rebooting commands as a single Backlog0."""
@@ -364,10 +364,19 @@ class TasmotaConnector(BaseConnector):
             self.log_at(1, "%s: sent %s %s", self.host.name, subject, redact(subject, value))
             self.cache(subject, value)
 
-    def _send_reboot(self, subject: str, value: str) -> None:
+    def send_reboot(self, subject: str, value: str) -> None:
         """Send a single reboot-triggering command and wait for the device.
 
         A reboot drains or aborts the backlog, so the command must stand alone.
+        The settings cache is refreshed when the device returns.
+
+        Args:
+            subject: The Tasmota command name.
+            value: The command payload.
+
+        Raises:
+            PyinfraError: If the device does not return within the configured
+                timeout.
         """
         self._request(f"{subject} {value}")
         self.log_at(1, "%s: sent %s %s", self.host.name, subject, redact(subject, value))
@@ -439,7 +448,7 @@ class TasmotaConnector(BaseConnector):
             return
         self._request("SetOption80 1")
         self.log_at(1, "%s: sent %s %s", self.host.name, "SetOption80", 1)
-        self._send_reboot("Restart", "1")
+        self.send_reboot("Restart", "1")
         self.cache("SetOption80", 1)
 
     # -- Unsupported execution surface ---------------------------------------

@@ -707,28 +707,46 @@ class TestRuleOperation:
 
 
 class TestRestart:
+    @pytest.fixture
+    def clock(self, monkeypatch):
+        clock = {"t": 0.0}
+        monkeypatch.setattr("pyinfra_tasmota.connector.time.monotonic", lambda: clock["t"])
+        monkeypatch.setattr(
+            "pyinfra_tasmota.connector.time.sleep",
+            lambda seconds: clock.__setitem__("t", clock["t"] + seconds),
+        )
+        return clock
+
     @pytest.mark.parametrize(("kwargs", "code"), [({}, 1), ({"code": 99}, 99)])
     def test_sends_command_at_execution(self, use_connector, status0, kwargs, code):
         connector = use_connector({"Status 0": status0, "Status 13": []})
-        connector.session.responses = CatchAll()
+        connector.session.responses = CatchAll(
+            {"Status 1": {"StatusPRM": {"BootCount": 6}}, "Status 0": status0}
+        )
         before = list(connector.session.requests)
         commands = list(operations.restart._inner(**kwargs))
         assert len(commands) == 1
         assert connector.session.requests == before
         assert commands[0].execute(None, FakeHost(connector), {}) is True
         assert connector.session.requests[len(before) :] == [
-            f"http://tasmota.example.org:80/cm?cmnd=Restart+{code}"
+            f"http://tasmota.example.org:80/cm?cmnd=Restart+{code}",
+            "http://tasmota.example.org:80/cm?cmnd=Status+1",
+            "http://tasmota.example.org:80/cm?cmnd=Status+0",
+            "http://tasmota.example.org:80/cm?cmnd=Status+13",
         ]
         assert not connector.has_pending()
 
     def test_applies_pending_commands_before_restart(self, use_connector, status0):
         connector = use_connector({"Status 0": status0, "Status 13": []})
-        connector.session.responses = CatchAll()
+        connector.session.responses = CatchAll(
+            {"Status 1": {"StatusPRM": {"BootCount": 6}}, "Status 0": status0}
+        )
         list(cmnd._inner(SetOption114=1))
+        before = len(connector.session.requests)
         command = next(operations.restart._inner())
         assert command.execute(None, FakeHost(connector), {}) is True
         assert not connector.has_pending()
-        assert connector.session.requests[-2:] == [
+        assert connector.session.requests[before : before + 2] == [
             "http://tasmota.example.org:80/cm?cmnd=Backlog0+SetOption114+1",
             "http://tasmota.example.org:80/cm?cmnd=Restart+1",
         ]
@@ -742,6 +760,92 @@ class TestRestart:
         with pytest.raises(ConnectError):
             command.execute(None, FakeHost(connector), {})
         assert not any("Restart" in url for url in connector.session.requests)
+
+    def test_waits_for_down_then_up_and_refreshes_cache(self, use_connector, status0, clock):
+        import requests
+
+        pings = [requests.ConnectionError("rebooting"), {"StatusPRM": {"BootCount": 5}}]
+
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 1":
+                return pings.pop(0)
+            return {}
+
+        connector = use_connector(handler)
+        status0["Status"]["SetOption114"] = 1
+        command = next(operations.restart._inner())
+        assert command.execute(None, FakeHost(connector), {}) is True
+        assert pings == []
+        assert clock["t"] > 0
+        assert connector.current("SetOption114") == "1"
+
+    def test_waits_for_bootcount_to_advance(self, use_connector, status0, clock):
+        pings = [{"StatusPRM": {"BootCount": count}} for count in [5, 6]]
+
+        def handler(cmnd):
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 1":
+                return pings.pop(0)
+            return {}
+
+        connector = use_connector(handler)
+        status0["StatusPRM"]["BootCount"] = 6
+        command = next(operations.restart._inner())
+        assert command.execute(None, FakeHost(connector), {}) is True
+        assert pings == []
+        assert clock["t"] > 0
+        assert connector.current("BootCount") == "6"
+
+    def test_reboot_timeout_raises(self, use_connector, status0, clock):
+        from pyinfra.api.exceptions import PyinfraError
+
+        connector = use_connector(
+            {
+                "Status 0": status0,
+                "Status 13": [],
+                "Restart 1": {},
+                "Status 1": {"StatusPRM": {"BootCount": 5}},
+            },
+            tasmota_reboot_timeout=1,
+        )
+        command = next(operations.restart._inner())
+        with pytest.raises(PyinfraError, match="device did not return within 1s after reboot"):
+            command.execute(None, FakeHost(connector), {})
+        assert clock["t"] == 1
+
+    def test_pending_reboot_completes_before_explicit_restart(self, use_connector, status0, clock):
+        seen = []
+
+        def handler(cmnd):
+            seen.append(cmnd)
+            if cmnd in {"Module 0", "Restart 1"}:
+                status0["StatusPRM"]["BootCount"] += 1
+            if cmnd == "Status 0":
+                return status0
+            if cmnd == "Status 1":
+                return {"StatusPRM": {"BootCount": status0["StatusPRM"]["BootCount"]}}
+            return {}
+
+        connector = use_connector(handler)
+        list(cmnd._inner(Module=0))
+        command = next(operations.restart._inner())
+        assert command.execute(None, FakeHost(connector), {}) is True
+        assert seen == [
+            "Status 0",
+            "Status 13",
+            "Module 0",
+            "Status 1",
+            "Status 0",
+            "Status 13",
+            "Restart 1",
+            "Status 1",
+            "Status 0",
+            "Status 13",
+        ]
+        assert connector.current("BootCount") == "7"
 
 
 class TestApply:

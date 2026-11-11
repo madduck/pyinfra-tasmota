@@ -140,7 +140,8 @@ Reboot-triggering settings are still read and diffed like any other command.
 Only commands whose bare form acts on the device or reports no value, such as
 `Backlog` or `Restart`, are sent without a read.
 
-If the device does not return within the timeout, `apply` reports an error.
+If the device does not return within `tasmota_reboot_timeout` (default `60`
+seconds), `apply` or `restart` reports an error.
 
 To send an explicit restart request at operation execution time, use `restart`:
 
@@ -153,7 +154,9 @@ restart()  # Sends Restart 1.
 `restart(code=99)` sends `Restart 99` instead. The operation calls the
 connector's `apply()` method before it sends the restart request. You do not
 need a separate `apply()` call. If applying pending commands fails, the restart
-request is not sent. The operation does not wait for the device to return.
+request is not sent. The operation waits for the device to return, then
+refreshes the settings cache. It uses the same reboot detection and timeout
+as other reboot-triggering commands.
 
 ## Templates
 
