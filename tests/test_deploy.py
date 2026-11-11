@@ -16,14 +16,35 @@ class TestTasmotaDeploy:
             lambda **kwargs: calls.append(("ensure_host_data", kwargs)),
         )
         monkeypatch.setattr(deploy_module, "apply", lambda: calls.append(("apply", None)))
+        monkeypatch.setattr(
+            deploy_module, "restart_device", lambda: calls.append(("restart", None))
+        )
         return calls
 
-    def test_ensures_host_data_then_applies(self, monkeypatch):
+    def test_ensures_host_data_then_applies_and_restarts(self, monkeypatch):
         calls = self._patch(monkeypatch)
         deploy_module.tasmota._inner()
         assert calls == [
             ("ensure_host_data", {"send_passwords": True}),
             ("apply", None),
+            ("restart", None),
+        ]
+
+    def test_restart_can_be_disabled(self, monkeypatch):
+        calls = self._patch(monkeypatch)
+        deploy_module.tasmota._inner(restart=False)
+        assert calls == [
+            ("ensure_host_data", {"send_passwords": True}),
+            ("apply", None),
+        ]
+
+    def test_restart_can_be_enabled_explicitly(self, monkeypatch):
+        calls = self._patch(monkeypatch)
+        deploy_module.tasmota._inner(restart=True)
+        assert calls == [
+            ("ensure_host_data", {"send_passwords": True}),
+            ("apply", None),
+            ("restart", None),
         ]
 
     def test_send_passwords_is_forwarded(self, monkeypatch):
@@ -32,4 +53,5 @@ class TestTasmotaDeploy:
         assert calls == [
             ("ensure_host_data", {"send_passwords": False}),
             ("apply", None),
+            ("restart", None),
         ]

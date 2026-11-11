@@ -5,10 +5,11 @@ from __future__ import annotations
 from pyinfra.api.deploy import deploy
 
 from .operations import apply, ensure_host_data
+from .operations import restart as restart_device
 
 
 @deploy("Ensure Tasmota settings")
-def tasmota(send_passwords: bool = True) -> None:
+def tasmota(send_passwords: bool = True, restart: bool = True) -> None:
     """Ensure every command under the ``tasmota`` host-data key.
 
     The key holds a mapping of command name to a value or a list of values.
@@ -21,10 +22,18 @@ def tasmota(send_passwords: bool = True) -> None:
     templates. A ``Template`` entry activates the template and ensures its
     ``CMND`` commands. A separate ``Module 0`` entry is skipped.
 
+    Pending commands are applied before the final restart. By default, the
+    deploy restarts the device even when all settings already match, and
+    waits for it to return.
+
     Args:
         send_passwords: When False, drop password commands (``Password1``,
             ``Password2``, ``MqttPassword``) before applying, so credentials
             can be left out of a routine run.
+        restart: When True, restart the device after applying settings and
+            wait for it to return. When False, skip this final restart.
     """
     ensure_host_data(send_passwords=send_passwords)
     apply()
+    if restart:
+        restart_device()

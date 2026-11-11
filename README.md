@@ -102,7 +102,12 @@ hosts = (
 ```
 
 The key holds a mapping of command name to a value or a list of values. The
-deploy ensures each command and then calls `apply`.
+deploy ensures each command, calls `apply`, then restarts the device and waits
+for it to return. The `restart` argument defaults to `True`, so the final
+restart runs even when all settings already match.
+
+Use `tasmota(restart=False)` to skip the final restart. Settings that trigger
+a reboot still restart the device during `apply`.
 
 `Rule<x>` keys are handled like the `rule` operation rather than as ordinary
 commands. The value is the rule text, a list of the text followed by flag
