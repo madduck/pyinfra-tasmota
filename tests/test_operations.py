@@ -649,6 +649,31 @@ class TestRuleOperation:
         assert ("rule1", "9") in connector._pending
 
 
+class TestRestart:
+    @pytest.mark.parametrize(("kwargs", "code"), [({}, 1), ({"code": 99}, 99)])
+    def test_sends_command_at_execution(self, use_connector, status0, kwargs, code):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        connector.session.responses = CatchAll()
+        before = list(connector.session.requests)
+        commands = list(operations.restart._inner(**kwargs))
+        assert len(commands) == 1
+        assert connector.session.requests == before
+        assert commands[0].execute(None, FakeHost(connector), {}) is True
+        assert connector.session.requests[len(before) :] == [
+            f"http://tasmota.example.org:80/cm?cmnd=Restart+{code}"
+        ]
+        assert not connector.has_pending()
+
+    def test_leaves_pending_commands_queued(self, use_connector, status0):
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        connector.session.responses = CatchAll()
+        list(cmnd._inner(SetOption114=1))
+        command = next(operations.restart._inner())
+        assert command.execute(None, FakeHost(connector), {}) is True
+        assert connector.has_pending()
+        assert not any("Backlog" in url for url in connector.session.requests)
+
+
 class TestApply:
     def test_no_pending_yields_nothing(self, use_connector, status0):
         use_connector({"Status 0": status0, "Status 13": []})

@@ -132,6 +132,18 @@ Only commands whose bare form acts on the device or reports no value, such as
 
 If the device does not return within the timeout, `apply` reports an error.
 
+To send an explicit restart request at operation execution time, use `restart`:
+
+```py
+from pyinfra_tasmota.operations import restart
+
+restart()  # Sends Restart 1.
+```
+
+`restart(code=99)` sends `Restart 99` instead. This operation sends the command
+without `apply()`. It does not flush pending commands or wait for the device
+to return. Call `apply()` before `restart()` if pending changes must go first.
+
 ## Templates
 
 The `template` operation stores a template and activates it by default:
