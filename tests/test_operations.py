@@ -721,14 +721,27 @@ class TestRestart:
         ]
         assert not connector.has_pending()
 
-    def test_leaves_pending_commands_queued(self, use_connector, status0):
+    def test_applies_pending_commands_before_restart(self, use_connector, status0):
         connector = use_connector({"Status 0": status0, "Status 13": []})
         connector.session.responses = CatchAll()
         list(cmnd._inner(SetOption114=1))
         command = next(operations.restart._inner())
         assert command.execute(None, FakeHost(connector), {}) is True
-        assert connector.has_pending()
-        assert not any("Backlog" in url for url in connector.session.requests)
+        assert not connector.has_pending()
+        assert connector.session.requests[-2:] == [
+            "http://tasmota.example.org:80/cm?cmnd=Backlog0+SetOption114+1",
+            "http://tasmota.example.org:80/cm?cmnd=Restart+1",
+        ]
+
+    def test_apply_failure_prevents_restart(self, use_connector, status0):
+        from pyinfra.api.exceptions import ConnectError
+
+        connector = use_connector({"Status 0": status0, "Status 13": []})
+        list(cmnd._inner(SetOption114=1))
+        command = next(operations.restart._inner())
+        with pytest.raises(ConnectError):
+            command.execute(None, FakeHost(connector), {})
+        assert not any("Restart" in url for url in connector.session.requests)
 
 
 class TestApply:

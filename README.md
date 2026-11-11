@@ -150,9 +150,10 @@ from pyinfra_tasmota.operations import restart
 restart()  # Sends Restart 1.
 ```
 
-`restart(code=99)` sends `Restart 99` instead. This operation sends the command
-without `apply()`. It does not flush pending commands or wait for the device
-to return. Call `apply()` before `restart()` if pending changes must go first.
+`restart(code=99)` sends `Restart 99` instead. The operation calls the
+connector's `apply()` method before it sends the restart request. You do not
+need a separate `apply()` call. If applying pending commands fails, the restart
+request is not sent. The operation does not wait for the device to return.
 
 ## Templates
 

@@ -444,8 +444,8 @@ def _ensure(connector: TasmotaConnector, subject: str, value: Any) -> bool:
 def restart(code: int = 1) -> Generator[PyinfraCommand, None, None]:
     """Send ``Restart <code>`` directly to the device.
 
-    The command runs when the operation executes, without flushing pending
-    commands or waiting for the device to return.
+    The operation applies pending commands before it sends the restart
+    request. It does not wait for the device to return.
 
     Args:
         code: The Tasmota restart code, default ``1``.
@@ -457,6 +457,7 @@ def restart(code: int = 1) -> Generator[PyinfraCommand, None, None]:
     def send(state: Any, host: Any) -> bool:
         connector = host.connector
         assert isinstance(connector, TasmotaConnector)
+        connector.apply()
         connector.send_command("Restart", code)
         return True
 
