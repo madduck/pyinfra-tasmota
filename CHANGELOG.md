@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+<!-- markdownlint-disable MD024 -->
+
+## [Unreleased]
+
+## [0.3.0] — 2026-11-11
+
+### Added
+
+- A `restart` operation to reboot devices, which flushes the command queue, and
+  blocks until the device is back online.
+
+### Changed
+
+- The `tasmota` deploy now uses the new `restart` operation by default to
+  restart devices post-deployment.
+- Handle host data templates in `ensure_host_data` and not the `tasmota` deploy.
+
 ## [0.2.0] — 2026-11-10
 
 ### Added
